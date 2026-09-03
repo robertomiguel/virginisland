@@ -10,6 +10,8 @@ import { extractVariants, type Variant } from './variants';
 import { buildPalm } from './palm';
 import { buildFlower, buildGrassClump } from './grass';
 import { ISLAND_TREE, JACARANDA, buildTree, type TreeSpec } from './tree';
+import { registerStandardMaterial } from './Shadows';
+import { REFLECT_MASK } from './Reflection';
 
 const windDir = new THREE.Vector2(...WIND.dir).normalize();
 const dummy = new THREE.Object3D();
@@ -18,10 +20,16 @@ const dummy = new THREE.Object3D();
  * Capa instanciada genérica: `variants[v]` tiene piezas cercanas y (opcionalmente) lejanas.
  * Cada 0.4 s se reparten los elementos por distancia a la cámara.
  */
-function InstancedLayer({ items, variants, nearDist, maxDist }: { items: Placed[]; variants: { near: Variant; far?: Variant }[]; nearDist: number; maxDist: number }) {
+function InstancedLayer({ items, variants, nearDist, maxDist, castShadow = false, receiveShadow = true, reflect = false }: {
+  items: Placed[]; variants: { near: Variant; far?: Variant }[]; nearDist: number; maxDist: number;
+  castShadow?: boolean; receiveShadow?: boolean; reflect?: boolean; // reflect: sale en el reflejo del agua
+}) {
   const refs = useRef<{ near: THREE.InstancedMesh[]; far: THREE.InstancedMesh[] }[]>(variants.map(() => ({ near: [], far: [] })));
   const timer = useRef(10);
   const counts = useMemo(() => variants.map((_, v) => items.filter((it) => it.variant === v).length), [items, variants]);
+  const layerMask = reflect ? REFLECT_MASK : 1;
+  // Los materiales estándar tienen que conocer las cascadas de sombra
+  useMemo(() => { for (const v of variants) for (const part of [...v.near.parts, ...(v.far?.parts ?? [])]) registerStandardMaterial(part.material); }, [variants]);
 
   useFrame(({ camera }, dt) => {
     timer.current += dt;
@@ -52,10 +60,10 @@ function InstancedLayer({ items, variants, nearDist, maxDist }: { items: Placed[
       {variants.map((vr, v) => (
         <group key={v}>
           {vr.near.parts.map((p, i) => (
-            <instancedMesh key={`n${i}`} ref={(el) => { if (el) refs.current[v].near[i] = el; }} args={[p.geometry, p.material, Math.max(1, counts[v])]} frustumCulled={false} count={0} />
+            <instancedMesh key={`n${i}`} ref={(el) => { if (el) refs.current[v].near[i] = el; }} args={[p.geometry, p.material, Math.max(1, counts[v])]} frustumCulled={false} count={0} castShadow={castShadow} receiveShadow={receiveShadow} layers-mask={layerMask} />
           ))}
           {vr.far?.parts.map((p, i) => (
-            <instancedMesh key={`f${i}`} ref={(el) => { if (el) refs.current[v].far[i] = el; }} args={[p.geometry, p.material, Math.max(1, counts[v])]} frustumCulled={false} count={0} />
+            <instancedMesh key={`f${i}`} ref={(el) => { if (el) refs.current[v].far[i] = el; }} args={[p.geometry, p.material, Math.max(1, counts[v])]} frustumCulled={false} count={0} castShadow={castShadow} receiveShadow={receiveShadow} layers-mask={layerMask} />
           ))}
         </group>
       ))}
@@ -80,7 +88,7 @@ function ProceduralTrees({ items, kind, spec, leafBase }: { items: Placed[]; kin
     return Array.from({ length: TREE_VARIANTS }, (_, i) => ({ near: buildTree(spec, kind * 100 + i + 1, barkMat, leafMat) }));
   }, [barkDiff, barkNor, leafDiff, leafAlpha, leafNor, spec, kind]);
   const mine = useMemo(() => items.filter((t) => t.kind === kind).map((t) => ({ ...t, variant: t.variant % TREE_VARIANTS })), [items, kind]);
-  return <InstancedLayer items={mine} variants={variants} nearDist={Infinity} maxDist={Infinity} />;
+  return <InstancedLayer items={mine} variants={variants} nearDist={Infinity} maxDist={Infinity} castShadow reflect />;
 }
 
 // Desactivado hasta tener un modelo de palmera mejor
@@ -92,7 +100,7 @@ export function Palms({ items }: { items: Placed[] }) {
     return Array.from({ length: PALM_VARIANTS }, (_, i) => ({ near: buildPalm(bark, barkNor, i + 1) }));
   }, [bark, barkNor]);
   const mine = useMemo(() => items.filter((t) => t.kind === 2), [items]);
-  return <InstancedLayer items={mine} variants={variants} nearDist={Infinity} maxDist={Infinity} />;
+  return <InstancedLayer items={mine} variants={variants} nearDist={Infinity} maxDist={Infinity} castShadow reflect />;
 }
 
 export function Trees({ items }: { items: Placed[] }) {
@@ -142,7 +150,7 @@ function RockKind({ items, kind }: { items: Placed[]; kind: number }) {
     return near.map((v, i) => ({ near: v, far: far[Math.min(i, far.length - 1)] }));
   }, [lod1, lod2, k.split]);
   const mine = useMemo(() => items.filter((t) => t.kind === kind).map((t) => ({ ...t, variant: t.variant % variants.length })), [items, kind, variants.length]);
-  return <InstancedLayer items={mine} variants={variants} nearDist={120} maxDist={Infinity} />;
+  return <InstancedLayer items={mine} variants={variants} nearDist={120} maxDist={Infinity} castShadow reflect />;
 }
 
 export function Rocks() {
@@ -164,7 +172,7 @@ function LogKind({ items, kind }: { items: Placed[]; kind: number }) {
   const lod2 = useGLTF(k.lod2);
   const variants = useMemo(() => [{ near: extractVariants(lod1.scene)[0], far: extractVariants(lod2.scene)[0] }], [lod1, lod2]);
   const mine = useMemo(() => items.filter((t) => t.kind === kind).map((t) => ({ ...t, variant: 0 })), [items, kind]);
-  return <InstancedLayer items={mine} variants={variants} nearDist={120} maxDist={Infinity} />;
+  return <InstancedLayer items={mine} variants={variants} nearDist={120} maxDist={Infinity} castShadow reflect />;
 }
 
 export function Logs() {

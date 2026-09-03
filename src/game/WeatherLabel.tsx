@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { weather, type WeatherKind } from './weather';
 
-const NAMES: Record<WeatherKind, string> = { despejado: 'Despejado', pocasNubes: 'Pocas nubes', cubierto: 'Cubierto', tormenta: 'Tormenta' };
+const NAMES: Record<WeatherKind, string> = { despejado: 'Despejado', pocasNubes: 'Pocas nubes', cubierto: 'Cubierto', llovizna: 'Garúa', aguacero: 'Aguacero', tormenta: 'Tormenta eléctrica' };
 
 export function WeatherLabel() {
   const [kind, setKind] = useState<WeatherKind>(weather.kind);
@@ -10,5 +10,5 @@ export function WeatherLabel() {
     const id = setInterval(() => setKind(weather.kind), 1000);
     return () => clearInterval(id);
   }, []);
-  return <div className="muted">Clima: {NAMES[kind]}{weather.locked ? ' (fijado por URL)' : ''}</div>;
+  return <div className="muted">Clima: {NAMES[kind]}</div>;
 }

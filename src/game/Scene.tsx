@@ -9,13 +9,15 @@ import { LAKE, lakeOutline } from './island';
 import { Environment } from './world/Environment';
 import { Terrain, buildHeightmap } from './world/Terrain';
 import { Ocean, StillWater } from './world/Water';
+import { OceanPhysics } from './world/OceanPhysics';
 import { River } from './world/River';
 import { Waterfall } from './world/Waterfall';
 import { CameraBounds } from './CameraBounds';
 import { Flora, Grass, Logs, Rocks, Trees } from './world/Vegetation';
 import { generateTrees } from './vegetation';
 import { Lights } from './world/Lights';
-import { WORLD_RADIUS, CAMERA_MAX_DISTANCE } from './config';
+import { PlanarReflection, reflections, reflectionsEnabled } from './world/Reflection';
+import { WORLD_RADIUS, CAMERA_MAX_DISTANCE, urlVec } from './config';
 
 /** Avanza una etapa de montaje por fotograma para que el mundo aparezca progresivamente. */
 function Stager({ stage, onAdvance, max }: { stage: number; onAdvance: (s: number) => void; max: number }) {
@@ -40,12 +42,19 @@ export function Scene() {
       <Suspense fallback={null}>
         <Terrain sunDir={sunDir} heightmap={heightmap} />
       </Suspense>
+      <OceanPhysics />
       <Ocean heightmap={heightmap} sunDir={sunDir} level={WATER_LEVEL} />
       {stage >= 1 && (
         <>
           <StillWater heightmap={heightmap} sunDir={sunDir} level={LAKE.level} outline={lakeOutline()} />
-          <River sunDir={sunDir} />
+          <River sunDir={sunDir} heightmap={heightmap} />
           <Waterfall />
+          {reflectionsEnabled() && (
+            <>
+              <PlanarReflection level={WATER_LEVEL} slot={reflections.sea} every={1} />
+              <PlanarReflection level={LAKE.level} slot={reflections.lake} every={2} phase={1} center={[LAKE.x, LAKE.z]} maxDistance={320} />
+            </>
+          )}
         </>
       )}
       {stage >= 2 && <Suspense fallback={null}><Trees items={trees} /></Suspense>}
@@ -54,7 +63,7 @@ export function Scene() {
       {stage >= 5 && <Grass />}
       <OrbitControls
         makeDefault
-        target={typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('vista') === 'horizonte' ? [0, 60, 0] : [0, 10, 0]}
+        target={urlVec('mira') ?? (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('vista') === 'horizonte' ? [0, 60, 0] : [0, 10, 0])}
         enableDamping
         dampingFactor={0.08}
         maxPolarAngle={Math.PI / 2 - 0.03}

@@ -28,3 +28,10 @@ export const WIND = { dir: [0.83, 0.41] as [number, number], speed: 9 }; // dire
 export const CLOUD_HEIGHT = 650;       // altura de la capa de nubes
 export const CLOUD_COVERAGE = 0.45;    // 0 = despejado, 1 = cubierto
 export const CLOUD_SHADOW = 0.5;       // oscurecimiento máximo bajo una nube
+
+/** ?cam=x,y,z y ?mira=x,y,z colocan la cámara y su objetivo (útil para revisar un rincón concreto). */
+export function urlVec(name: string): [number, number, number] | null {
+  if (typeof window === 'undefined') return null;
+  const v = new URLSearchParams(window.location.search).get(name)?.split(',').map(Number);
+  return v && v.length === 3 && v.every((n) => Number.isFinite(n)) ? (v as [number, number, number]) : null;
+}

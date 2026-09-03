@@ -6,8 +6,10 @@ import { HEIGHTMAP_SIZE, ISLAND_SIZE, TERRAIN_SEGMENTS, lowQuality } from '../co
 import { localWaterLevel, terrainHeight } from '../terrain';
 import type { Placed } from '../vegetation';
 import { CLOUD_COVERAGE, CLOUD_HEIGHT, CLOUD_SHADOW, WIND } from '../config';
-import { cloudGLSL, noiseGLSL } from './skyGLSL';
-import { cloudMotion, weather } from '../weather';
+import { cloudGLSL, noiseGLSL, rainGLSL } from './skyGLSL';
+import { shadowUniforms, shadowsGLSL } from './Shadows';
+import { REFLECT_MASK } from './Reflection';
+import { cloudMotion, lightning, sunState, sunStrength, weather } from '../weather';
 
 function buildTerrainGeometry(): THREE.BufferGeometry {
   const segs = lowQuality() ? Math.round(TERRAIN_SEGMENTS / 4) : TERRAIN_SEGMENTS;
@@ -98,11 +100,18 @@ const fragmentShader = /* glsl */ `
   uniform float cloudHeight;
   uniform float cloudShadow;
   uniform float sunStrength;
+  uniform float flash;
+  uniform float wet;
+  uniform float dayLight;
+  uniform float rainTime;
+  uniform vec3 skyReflect;
   varying vec3 vWorldPos;
   varying vec3 vNormal;
   #include <fog_pars_fragment>
   ${noiseGLSL}
   ${cloudGLSL}
+  ${rainGLSL}
+  ${shadowsGLSL()}
 
   // Dos escalas mezcladas y una rotación para romper el mosaico de la textura
   vec3 sampleTop(sampler2D map, float scale) {
@@ -178,11 +187,32 @@ const fragmentShader = /* glsl */ `
     // Sombra de las nubes: se proyecta desde la capa de nubes siguiendo la dirección del sol
     vec2 shadowXZ = vWorldPos.xz + sunDir.xz / max(sunDir.y, 0.05) * (cloudHeight - vWorldPos.y);
     float cloud = cloudDensity(shadowXZ);
-    float sunLight = (1.0 - cloudShadow * smoothstep(0.1, 0.8, cloud)) * sunStrength;
+    // Sombras del relieve y del bosque (mapas en cascada) además de las nubes
+    float sunLight = (1.0 - cloudShadow * smoothstep(0.1, 0.8, cloud)) * sunStrength * sunShadow(vWorldPos, n);
     vec3 hemi = mix(groundColor, skyColor, shadedN.y * 0.5 + 0.5);
     // Sombra difusa de las copas: el sotobosque es más oscuro
-    float canopyShade = 1.0 - 0.45 * smoothstep(0.1, 0.9, forest);
-    vec3 color = albedo * (sunColor * diff * sunLight * canopyShade + hemi * (1.0 - 0.25 * cloud) * (0.55 + 0.45 * sunStrength) * (0.7 + 0.3 * canopyShade));
+    float canopyShade = 1.0 - 0.25 * smoothstep(0.1, 0.9, forest);
+    // Suelo mojado: más oscuro, saturado y con brillo especular
+    albedo *= 1.0 - 0.45 * wet;
+    vec3 color = albedo * (sunColor * diff * sunLight * canopyShade + hemi * (1.0 - 0.25 * cloud) * (0.55 + 0.45 * sunStrength) * (0.7 + 0.3 * canopyShade) * mix(0.015, 1.0, dayLight));
+    vec3 v = normalize(cameraPosition - vWorldPos);
+    vec3 hv = normalize(sunDir + v);
+    color += sunColor * pow(max(dot(shadedN, hv), 0.0), 40.0) * 0.35 * wet * sunLight;
+
+    // Charcos en zonas llanas: reflejan el cielo y reciben las ondas de la lluvia
+    float puddle = wet * (1.0 - smoothstep(0.02, 0.10, slope)) * smoothstep(0.52, 0.72, vnoise(vWorldPos.xz * 0.22 + 41.0)) * (1.0 - sandW) * (1.0 - rockW);
+    if (puddle > 0.01) {
+      float rainNear = wet * (1.0 - smoothstep(120.0, 300.0, distance(cameraPosition, vWorldPos)));
+      vec3 rp = rainRipples(vWorldPos.xz, rainTime, rainNear, 1.0 + distance(cameraPosition, vWorldPos) / 45.0);
+      vec3 pn = normalize(vec3(rp.x, 1.0, rp.y) + n * 0.2);
+      float fres = pow(1.0 - max(dot(pn, v), 0.0), 3.0);
+      vec3 hp = normalize(sunDir + v);
+      float pspec = pow(max(dot(pn, hp), 0.0), 220.0) * 2.0 * sunLight;
+      vec3 puddleColor = mix(albedo * 0.35, skyReflect * mix(0.15, 1.0, dayLight), 0.35 + 0.55 * fres) + sunColor * pspec + vec3(0.9, 0.95, 1.0) * rp.z * 0.7 * mix(0.15, 1.0, dayLight);
+      color = mix(color, puddleColor, puddle * 0.85);
+    }
+    // Relámpago: luz blanca desde arriba
+    color += albedo * flash * (1.2 + 0.8 * max(shadedN.y, 0.0));
 
     // Fondo sumergido (mar, río o laguna): más oscuro y azulado
     float under = 1.0 - smoothstep(waterLevel - 3.0, waterLevel + 0.15, h);
@@ -227,6 +257,11 @@ export function Terrain({ sunDir, heightmap }: { sunDir: THREE.Vector3; heightma
           cloudHeight: { value: CLOUD_HEIGHT },
           cloudShadow: { value: CLOUD_SHADOW },
           sunStrength: { value: 1 },
+          flash: { value: 0 },
+          wet: { value: 0 },
+          dayLight: { value: 1 },
+          rainTime: { value: 0 },
+          skyReflect: { value: new THREE.Color('#9fbfdc') },
           sunDir: { value: sunDir.clone() },
           sunColor: { value: new THREE.Color('#fff2d6').multiplyScalar(1.6) },
           skyColor: { value: new THREE.Color('#9ec3e6').multiplyScalar(0.55) },
@@ -248,13 +283,21 @@ export function Terrain({ sunDir, heightmap }: { sunDir: THREE.Vector3; heightma
   material.uniforms.wildMap.value = wildMap;
   material.uniforms.wildNor.value = wildNor;
   material.uniforms.heightmap.value = heightmap;
+  Object.assign(material.uniforms, shadowUniforms);
 
-  useFrame(({ clock }) => {
+  useFrame(({ clock }, dt) => {
+    material.uniforms.rainTime.value += Math.min(dt, 0.05);
+    material.uniforms.skyReflect.value.copy(sunState.horizon);
     material.uniforms.cloudTime.value = cloudMotion.time;
     material.uniforms.cloudOffset.value.set(cloudMotion.offsetX, cloudMotion.offsetZ);
     material.uniforms.cloudCoverage.value = weather.params.coverage;
-    material.uniforms.sunStrength.value = weather.params.sun;
+    material.uniforms.sunStrength.value = sunStrength();
+    material.uniforms.dayLight.value = sunState.day;
+    material.uniforms.sunDir.value.copy(sunState.dir);
+    material.uniforms.sunColor.value.copy(sunState.color).multiplyScalar(1.6);
+    material.uniforms.flash.value = lightning.flash;
+    material.uniforms.wet.value = Math.min(1, weather.params.rain * 1.4);
   });
 
-  return <mesh geometry={geometry} material={material} />;
+  return <mesh geometry={geometry} material={material} castShadow layers-mask={REFLECT_MASK} />;
 }
