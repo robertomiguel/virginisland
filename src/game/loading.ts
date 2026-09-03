@@ -2,7 +2,7 @@
 // Estado de carga compartido entre la escena (que lo escribe) y la pantalla de carga (que lo lee).
 export const loading = { phase: 'Preparando', stage: 0, done: false };
 
-export const LOAD_PHASES = ['Generando terreno y mar', 'Río, cascada y laguna', 'Plantando árboles', 'Flora baja', 'Rocas', 'Pasto y flores', 'Listo'];
+export const LOAD_PHASES = ['Generando terreno y mar', 'Río, cascada y laguna', 'Plantando árboles', 'Flora baja', 'Rocas y barco', 'Pasto y flores', 'Listo'];
 
 export function setPhase(stage: number) {
   loading.stage = stage;

@@ -16,6 +16,7 @@ import { CameraBounds } from './CameraBounds';
 import { Flora, Grass, Logs, Rocks, Trees } from './world/Vegetation';
 import { generateTrees } from './vegetation';
 import { Lights } from './world/Lights';
+import { Ship } from './world/Ship';
 import { PlanarReflection, reflections, reflectionsEnabled } from './world/Reflection';
 import { WORLD_RADIUS, CAMERA_MAX_DISTANCE, urlVec } from './config';
 
@@ -59,7 +60,7 @@ export function Scene() {
       )}
       {stage >= 2 && <Suspense fallback={null}><Trees items={trees} /></Suspense>}
       {stage >= 3 && <Suspense fallback={null}><Flora /></Suspense>}
-      {stage >= 4 && <Suspense fallback={null}><Rocks /><Logs /></Suspense>}
+      {stage >= 4 && <Suspense fallback={null}><Rocks /><Logs /><Ship /></Suspense>}
       {stage >= 5 && <Grass />}
       <OrbitControls
         makeDefault

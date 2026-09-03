@@ -204,9 +204,11 @@ const fragmentShader = /* glsl */ `
 
     vec2 shadowXZ = vWorldPos.xz + sunDir.xz / max(sunDir.y, 0.05) * (cloudHeight - vWorldPos.y);
     float cloud = smoothstep(0.1, 0.8, cloudDensity(shadowXZ));
-    // Sol: nubes y sombras del relieve/bosque (cascadas)
-    float sunLight = (1.0 - cloudShadow * cloud) * sunStrength * sunShadow(vWorldPos, n);
-    float ambient = (1.0 - 0.35 * cloud) * (0.6 + 0.4 * sunStrength) * night;
+    // Sol: nubes y sombras del relieve/bosque/barcos (cascadas). La sombra también apaga la luz que
+    // entra en el agua, no solo el brillo: si no, lo que flota parece pegado encima.
+    float shade = sunShadow(vWorldPos, n);
+    float sunLight = (1.0 - cloudShadow * cloud) * sunStrength * shade;
+    float ambient = (1.0 - 0.35 * cloud) * (1.0 - 0.32 * (1.0 - shade) * sunStrength) * (0.6 + 0.4 * sunStrength) * night;
 
     vec3 water = mix(shallowColor, deepColor, smoothstep(0.0, 9.0, vDepth)) * ambient;
     // Reflejo: la isla, el bosque y el cielo espejados; sin textura, el color plano del cielo

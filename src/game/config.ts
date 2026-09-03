@@ -25,6 +25,13 @@ export function lowQuality(): boolean {
 
 // Cielo y viento
 export const WIND = { dir: [0.83, 0.41] as [number, number], speed: 9 }; // dirección en XZ (se normaliza) y m/s
+// Barco fondeado frente a la costa (a 50 m de tierra, 14 m de fondo). Proa (+x del modelo) al viento, como todo barco anclado.
+export const SHIP = {
+  x: 62, z: 230,
+  heading: Math.atan2(WIND.dir[1], -WIND.dir[0]), // giro en Y
+  hull: [13.5, 4.3] as [number, number], // semiejes de la huella del casco en la línea de flotación (m)
+  hullOffset: 0.5,                        // el centro del casco está algo a proa del origen del modelo
+};
 export const CLOUD_HEIGHT = 650;       // altura de la capa de nubes
 export const CLOUD_COVERAGE = 0.45;    // 0 = despejado, 1 = cubierto
 export const CLOUD_SHADOW = 0.5;       // oscurecimiento máximo bajo una nube

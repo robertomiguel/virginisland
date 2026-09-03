@@ -190,6 +190,9 @@ export function sigmaForWind(v: number): number {
   return Math.min(1.4, 0.012 * v * v * 0.35 + 0.02 * v); // 5 m/s → 0.2 m, 9 → 0.52, 16 → 1.4
 }
 
+/** Bloque de texels de desplazamiento: el texel (i, j) del bloque cubre el mundo desde ((i0+i)·texel, (j0+j)·texel). */
+export interface DisplacementBlock { data: Float32Array; i0: number; j0: number; w: number; h: number; texel: number }
+
 export class OceanSim {
   readonly displacement: THREE.Texture;
   readonly normals: THREE.Texture;
@@ -236,6 +239,49 @@ export class OceanSim {
     this.normRT = makeRT(FFT_N, 1, THREE.RepeatWrapping, THREE.LinearFilter);
     this.displacement = this.dispRT.texture;
     this.normals = this.normRT.texture;
+  }
+
+  /**
+   * Lee de la GPU el desplazamiento (dx, dy, dz, _) de los texels a menos de `radius` metros de (x, z).
+   * El bloque puede cruzar el borde del parche (se lee por trozos). Lectura síncrona: parada del
+   * pipeline, así que conviene llamarlo pocas veces y no cada fotograma.
+   */
+  readDisplacementArea(gl: THREE.WebGLRenderer, x: number, z: number, radius: number, out: DisplacementBlock): DisplacementBlock {
+    const texel = PATCH / FFT_N;
+    const n = Math.ceil(radius / texel);
+    const w = 2 * n + 1;
+    out.i0 = Math.floor(x / texel) - n;
+    out.j0 = Math.floor(z / texel) - n;
+    out.w = out.h = w;
+    out.texel = texel;
+    if (out.data.length < w * w * 4) out.data = new Float32Array(w * w * 4);
+    const wrap = (i: number) => ((i % FFT_N) + FFT_N) % FFT_N;
+    // trozos contiguos en la textura: [inicio, longitud]
+    const spans = (i0: number, len: number) => {
+      const res: [number, number, number][] = []; // [offset en el bloque, texel inicial, longitud]
+      let off = 0;
+      while (off < len) {
+        const t = wrap(i0 + off);
+        const l = Math.min(len - off, FFT_N - t);
+        res.push([off, t, l]);
+        off += l;
+      }
+      return res;
+    };
+    for (const [oy, ty, ly] of spans(out.j0, w)) {
+      for (const [ox, tx, lx] of spans(out.i0, w)) {
+        const buf = this.scratch(lx * ly * 4);
+        gl.readRenderTargetPixels(this.dispRT, tx, ty, lx, ly, buf);
+        for (let j = 0; j < ly; j++) out.data.set(buf.subarray(j * lx * 4, (j + 1) * lx * 4), ((oy + j) * w + ox) * 4);
+      }
+    }
+    return out;
+  }
+
+  private scratchBuf = new Float32Array(0);
+  private scratch(n: number): Float32Array {
+    if (this.scratchBuf.length < n) this.scratchBuf = new Float32Array(n);
+    return this.scratchBuf.length === n ? this.scratchBuf : this.scratchBuf.subarray(0, n);
   }
 
   /** Regenera el espectro si el viento cambió bastante (con fundido de 5 s). */
