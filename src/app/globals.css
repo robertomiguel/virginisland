@@ -1,49 +1,18 @@
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: #0f141a; color: #e8eef4; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+.game-root { position: fixed; inset: 0; overflow: hidden; }
+.game-root canvas { display: block; width: 100%; height: 100%; }
+.loading { position: fixed; inset: 0; display: grid; place-items: center; font-size: 18px; }
+.hint-box { position: fixed; left: 14px; bottom: 14px; padding: 8px 12px; background: rgba(0,0,0,.45); border-radius: 8px; font-size: 13px; pointer-events: none; }
+.muted { opacity: 0.7; }
 
-html {
-  height: 100%;
-}
-
-html,
-body {
-  max-width: 100vw;
-  overflow-x: hidden;
-}
-
-body {
-  min-height: 100%;
-  display: flex;
-  flex-direction: column;
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-* {
-  box-sizing: border-box;
-  padding: 0;
-  margin: 0;
-}
-
-a {
-  color: inherit;
-  text-decoration: none;
-}
-
-@media (prefers-color-scheme: dark) {
-  html {
-    color-scheme: dark;
-  }
-}
+/* Pantalla de carga */
+.loader { position: fixed; inset: 0; display: grid; place-items: center; background: #0f141a; z-index: 10; }
+.loader-card { text-align: center; min-width: 280px; }
+.loader-title { font-size: 20px; margin: 18px 0 6px; }
+.loader-phase { opacity: 0.7; font-size: 14px; min-height: 20px; }
+.loader-bar { margin: 16px auto 0; width: 240px; height: 6px; background: #22303c; border-radius: 3px; overflow: hidden; }
+.loader-bar > div { height: 100%; background: #5fa8e0; transition: width .3s; }
+.spinner { width: 44px; height: 44px; margin: 0 auto; border: 4px solid #22303c; border-top-color: #5fa8e0; border-radius: 50%; animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }

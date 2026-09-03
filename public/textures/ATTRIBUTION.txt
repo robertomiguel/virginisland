@@ -1,0 +1,4 @@
+Texturas: Poly Haven (CC0) — aerial_beach_01, aerial_grass_rock, rock_face
+bark_brown_02 (Poly Haven CC0) para el tronco de las palmeras
+island_tree_01 / jacaranda_tree (Poly Haven CC0): atlas de hojas y corteza para árboles procedurales
+forest_floor, forrest_ground_01 (Poly Haven CC0) suelo de bosque
