@@ -1,15 +1,15 @@
 'use client';
-import { useEffect, useMemo, useRef } from 'react';
+import { Suspense, useEffect, useMemo, useRef } from 'react';
 import { useFrame, useLoader } from '@react-three/fiber';
 import { useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
-import { FLORA_KINDS, FLOWER_COLORS, GRASS_VARIANTS, LOG_KINDS, PALM_VARIANTS, ROCK_KINDS, generateFlora, generateGrass, generateLogs, generateRocks, type Placed } from '../vegetation';
+import { FLORA_KINDS, FLOWER_KINDS, GRASS_MODEL, GRASS_VARIANTS, LOG_KINDS, ROCK_KINDS, TREE_KINDS, TREE_NEAR, generateFlora, generateGrass, generateLogs, generateRocks, type Placed } from '../vegetation';
 import { WIND } from '../config';
 import { weather } from '../weather';
-import { extractVariants, type Variant } from './variants';
-import { buildPalm } from './palm';
-import { buildFlower, buildGrassClump } from './grass';
-import { ISLAND_TREE, JACARANDA, buildTree, type TreeSpec } from './tree';
+import { FOLIAGE_ALPHA_TEST, extractVariants, matchFoliage, type Variant } from './variants';
+import { prepareAlphaMap } from './alphaMips';
+import { addWindSway } from './windShader';
+import { buildMossClump } from './grass';
 import { registerStandardMaterial } from './Shadows';
 import { REFLECT_MASK } from './Reflection';
 
@@ -72,43 +72,31 @@ function InstancedLayer({ items, variants, nearDist, maxDist, castShadow = false
 }
 
 // --- Árboles -------------------------------------------------------------------------------
-const TREE_VARIANTS = 6;
-
-function ProceduralTrees({ items, kind, spec, leafBase }: { items: Placed[]; kind: 0 | 1; spec: TreeSpec; leafBase: string }) {
-  const [barkDiff, barkNor, leafDiff, leafAlpha, leafNor] = useLoader(THREE.TextureLoader, [
-    '/textures/island_tree_01_bark_diff.jpg', '/textures/island_tree_01_bark_nor.jpg',
-    `/textures/${leafBase}_diff.jpg`, `/textures/${leafBase}_alpha.jpg`, `/textures/${leafBase}_nor.jpg`,
-  ]);
+function TreeKind({ items, kind }: { items: Placed[]; kind: number }) {
+  const k = TREE_KINDS[kind];
+  const lod1 = useGLTF(k.lod1);
+  const lod2 = useGLTF(k.lod2);
+  const alpha = useLoader(THREE.TextureLoader, k.alpha);
   const variants = useMemo(() => {
-    barkDiff.wrapS = barkDiff.wrapT = barkNor.wrapS = barkNor.wrapT = THREE.RepeatWrapping;
-    barkDiff.colorSpace = leafDiff.colorSpace = THREE.SRGBColorSpace;
-    leafDiff.anisotropy = leafAlpha.anisotropy = 4;
-    const barkMat = new THREE.MeshStandardMaterial({ map: barkDiff, normalMap: barkNor, roughness: 0.95, name: 'bark' });
-    const leafMat = new THREE.MeshStandardMaterial({ map: leafDiff, alphaMap: leafAlpha, normalMap: leafNor, alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.8, name: 'leaves' });
-    return Array.from({ length: TREE_VARIANTS }, (_, i) => ({ near: buildTree(spec, kind * 100 + i + 1, barkMat, leafMat) }));
-  }, [barkDiff, barkNor, leafDiff, leafAlpha, leafNor, spec, kind]);
-  const mine = useMemo(() => items.filter((t) => t.kind === kind).map((t) => ({ ...t, variant: t.variant % TREE_VARIANTS })), [items, kind]);
-  return <InstancedLayer items={mine} variants={variants} nearDist={Infinity} maxDist={Infinity} castShadow reflect />;
-}
-
-// Desactivado hasta tener un modelo de palmera mejor
-export function Palms({ items }: { items: Placed[] }) {
-  const [bark, barkNor] = useLoader(THREE.TextureLoader, ['/textures/bark_brown_02_diff.jpg', '/textures/bark_brown_02_nor.jpg']);
-  const variants = useMemo(() => {
-    bark.wrapS = bark.wrapT = barkNor.wrapS = barkNor.wrapT = THREE.RepeatWrapping;
-    bark.colorSpace = THREE.SRGBColorSpace;
-    return Array.from({ length: PALM_VARIANTS }, (_, i) => ({ near: buildPalm(bark, barkNor, i + 1) }));
-  }, [bark, barkNor]);
-  const mine = useMemo(() => items.filter((t) => t.kind === 2), [items]);
-  return <InstancedLayer items={mine} variants={variants} nearDist={Infinity} maxDist={Infinity} castShadow reflect />;
+    prepareAlphaMap(alpha, FOLIAGE_ALPHA_TEST);
+    // El alfa solo va en las hojas; tronco y ramas son opacos
+    const opts = { alphaMap: { leaves: alpha }, singleVariant: true };
+    const near = extractVariants(lod1.scene, opts)[0];
+    const far = extractVariants(lod2.scene, opts)[0];
+    matchFoliage(near, far);   // el lod2 viene con una cuarta parte de las hojas
+    return [{ near, far }];
+  }, [lod1, lod2, alpha]);
+  const mine = useMemo(() => items.filter((t) => t.kind === kind).map((t) => ({ ...t, variant: 0 })), [items, kind]);
+  return <InstancedLayer items={mine} variants={variants} nearDist={TREE_NEAR} maxDist={Infinity} castShadow reflect />;
 }
 
 export function Trees({ items }: { items: Placed[] }) {
-  useEffect(() => { console.info(`[isla] árboles: ${items.length} (jacarandas ${items.filter((t) => t.kind === 0).length}, anchos ${items.filter((t) => t.kind === 1).length}, palmeras ${items.filter((t) => t.kind === 2).length})`); }, [items]);
+  useEffect(() => { console.info(`[isla] árboles: ${items.length} (jacarandas ${items.filter((t) => t.kind === 0).length}, anchos ${items.filter((t) => t.kind === 1).length})`); }, [items]);
   return (
     <group>
-      <ProceduralTrees items={items} kind={0} spec={JACARANDA} leafBase="jacaranda_leaves" />
-      <ProceduralTrees items={items} kind={1} spec={ISLAND_TREE} leafBase="island_tree_01_leaves" />
+      {TREE_KINDS.map((_, i) => (
+        <TreeKind key={i} items={items} kind={i} />
+      ))}
     </group>
   );
 }
@@ -119,7 +107,7 @@ function FloraKind({ items, kind, onVariants }: { items: Placed[]; kind: number;
   const gltf = useGLTF(k.url);
   const alpha = useLoader(THREE.TextureLoader, k.alpha);
   const variants = useMemo(() => {
-    alpha.flipY = false; // las texturas de glTF no se voltean
+    prepareAlphaMap(alpha, FOLIAGE_ALPHA_TEST);
     return extractVariants(gltf.scene, { alphaMap: alpha }).map((v) => ({ near: v }));
   }, [gltf, alpha]);
   useEffect(() => onVariants?.(variants.length), [variants, onVariants]);
@@ -187,14 +175,42 @@ export function Logs() {
   );
 }
 
+// --- Flores --------------------------------------------------------------------------------
+/** Una especie de flor: cada ejemplar del GLB (a, b, c…) es una variante que se reparte por `sub`. */
+function FlowerKind({ items, kind }: { items: Placed[]; kind: number }) {
+  const k = FLOWER_KINDS[kind];
+  const gltf = useGLTF(k.url);
+  const alpha = useLoader(THREE.TextureLoader, k.alpha);
+  const variants = useMemo(() => {
+    prepareAlphaMap(alpha, FOLIAGE_ALPHA_TEST);
+    return extractVariants(gltf.scene, { alphaMap: alpha }).map((v) => ({ near: v }));
+  }, [gltf, alpha]);
+  const mine = useMemo(
+    () => items.filter((t) => t.variant === kind).map((t) => ({ ...t, variant: (t.sub ?? 0) % variants.length })),
+    [items, kind, variants.length],
+  );
+  return <InstancedLayer items={mine} variants={variants} nearDist={Infinity} maxDist={60} />;
+}
+
 // --- Pasto y flores ------------------------------------------------------------------------
 const GRASS_WIND = 0.012; // 0 para apagar el vaivén del pasto
 
 export function Grass() {
   const items = useMemo(() => generateGrass(), []);
   const registry = useMemo<THREE.WebGLProgramParametersWithUniforms[]>(() => [], []);
-  const grassVariants = useMemo(() => Array.from({ length: GRASS_VARIANTS }, (_, i) => ({ near: buildGrassClump(i + 1, registry, GRASS_WIND) })), [registry]);
-  const flowerVariants = useMemo(() => FLOWER_COLORS.map((c, i) => ({ near: buildFlower(i + 1, c, registry, GRASS_WIND) })), [registry]);
+  const gltf = useGLTF(GRASS_MODEL.url);
+  const alpha = useLoader(THREE.TextureLoader, GRASS_MODEL.alpha);
+  const grassVariants = useMemo(() => {
+    prepareAlphaMap(alpha, FOLIAGE_ALPHA_TEST);
+    // Los matojos del modelo miden ~3 cm: se agrandan y se agrupan en matas del tamaño del pasto
+    const tufts = extractVariants(gltf.scene, { alphaMap: alpha });
+    const material = tufts[0].parts[0].material;
+    if (GRASS_WIND > 0) addWindSway(material as THREE.MeshStandardMaterial, GRASS_WIND, registry);
+    const geos = tufts.map((t) => t.parts[0].geometry);
+    return Array.from({ length: GRASS_VARIANTS }, (_, i) => ({
+      near: { parts: [{ geometry: buildMossClump(i + 1, geos, GRASS_MODEL.tuftScale), material }], baseY: 0 } as Variant,
+    }));
+  }, [gltf, alpha, registry]);
   const grass = useMemo(() => items.filter((t) => t.kind === 0), [items]);
   const flowers = useMemo(() => items.filter((t) => t.kind === 1), [items]);
   useEffect(() => { console.info(`[isla] matas de pasto: ${grass.length}, flores: ${flowers.length}`); }, [grass, flowers]);
@@ -211,11 +227,16 @@ export function Grass() {
   return (
     <group>
       <InstancedLayer items={grass} variants={grassVariants} nearDist={Infinity} maxDist={75} />
-      <InstancedLayer items={flowers} variants={flowerVariants} nearDist={Infinity} maxDist={60} />
+      {FLOWER_KINDS.map((_, i) => (
+        <Suspense key={i} fallback={null}><FlowerKind items={flowers} kind={i} /></Suspense>
+      ))}
     </group>
   );
 }
 
+useGLTF.preload(GRASS_MODEL.url);
+for (const k of TREE_KINDS) { useGLTF.preload(k.lod1); useGLTF.preload(k.lod2); }
 for (const k of FLORA_KINDS) useGLTF.preload(k.url);
+for (const k of FLOWER_KINDS) useGLTF.preload(k.url);
 for (const k of ROCK_KINDS) { useGLTF.preload(k.lod1); useGLTF.preload(k.lod2); }
 for (const k of LOG_KINDS) { useGLTF.preload(k.lod1); useGLTF.preload(k.lod2); }

@@ -7,10 +7,12 @@ import { Scene } from './Scene';
 import { FrameLimiter } from './FrameLimiter';
 import { MAX_DPR, TARGET_FPS, urlVec } from './config';
 import { WeatherLabel } from './WeatherLabel';
+import { useNavigationMode } from './navigation';
 
 const lowView = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('vista') === 'horizonte';
 
 export function GameCanvas() {
+  const navMode = useNavigationMode();
   // La escena se monta tras pintar la pantalla de carga; si no, el navegador queda en negro durante la generación.
   const [mount, setMount] = useState(false);
   useEffect(() => {
@@ -36,7 +38,11 @@ export function GameCanvas() {
       <Loader />
       <ControlPanel />
       <div className="hint-box">
-        <div>Arrastrar: orbitar · Rueda: zoom · Botón derecho: desplazar</div>
+        {navMode === 'walk' ? (
+          <div>WASD / Flechas: caminar · Shift: correr · Espacio: saltar · Arrastrar: mirar</div>
+        ) : (
+          <div>Arrastrar: orbitar · Rueda: zoom · Botón derecho: desplazar</div>
+        )}
         <WeatherLabel />
       </div>
     </div>

@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import { addWindSway } from './windShader';
 
+/** Umbral de recorte del follaje: lo comparten los materiales y las mipmaps de cobertura. */
+export const FOLIAGE_ALPHA_TEST = 0.45;
+
 export interface Part { geometry: THREE.BufferGeometry; material: THREE.Material }
 export interface Variant { parts: Part[]; baseY: number }
 
@@ -8,8 +11,9 @@ export interface VariantOptions {
   registry?: THREE.WebGLProgramParametersWithUniforms[]; // para el viento
   windLeaves?: number;   // fuerza de viento en materiales "leaves"
   windBranches?: number; // fuerza en "branch"
-  alphaMap?: THREE.Texture | null; // mapa alfa externo (Poly Haven lo entrega aparte)
+  alphaMap?: THREE.Texture | Record<string, THREE.Texture> | null; // mapa alfa externo (Poly Haven lo entrega aparte); si son varios materiales, por trozo de su nombre
   splitComponents?: boolean;       // separar una única malla en piezas conexas (sets de rocas)
+  singleVariant?: boolean;         // todas las mallas son un solo modelo (árboles: tronco + ramas + hojas)
 }
 
 /** Recorta una geometría indexada a un subconjunto de triángulos. */
@@ -84,19 +88,85 @@ function splitConnected(geo: THREE.BufferGeometry, gap = 0.12): THREE.BufferGeom
   return big.map((m) => subGeometry(geo, m.tris));
 }
 
+/** Componentes conexos crudos (sin agrupar): en el follaje, cada uno es una carta de hoja. */
+function connectedComponents(geo: THREE.BufferGeometry): number[][] {
+  const index = geo.getIndex();
+  if (!index) return [];
+  const nV = geo.attributes.position.count;
+  const parent = new Int32Array(nV);
+  for (let i = 0; i < nV; i++) parent[i] = i;
+  const find = (i: number) => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+  for (let t = 0; t < index.count; t += 3) {
+    const a = find(index.getX(t)), b = find(index.getX(t + 1)), c = find(index.getX(t + 2));
+    parent[b] = a; parent[find(c)] = find(a);
+  }
+  const groups = new Map<number, number[]>();
+  for (let v = 0; v < nV; v++) {
+    const r = find(v);
+    let g = groups.get(r);
+    if (!g) groups.set(r, (g = []));
+    g.push(v);
+  }
+  return [...groups.values()];
+}
+
+/**
+ * Agranda cada carta de hoja alrededor de su propio centro.
+ *
+ * Los LOD lejanos de Poly Haven se generan tirando cartas enteras (el lod2 conserva 1200 de 5000):
+ * sin compensar, la copa se queda pelada a partir de TREE_NEAR y se ve el cielo y las nubes a
+ * través del árbol. Al escalar las cartas que quedan por raíz de la proporción, la superficie de
+ * follaje —y por tanto la silueta de la copa— se mantiene.
+ */
+export function inflateLeafCards(geo: THREE.BufferGeometry, factor: number) {
+  if (!(factor > 1.001)) return;
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  for (const verts of connectedComponents(geo)) {
+    let cx = 0, cy = 0, cz = 0;
+    for (const v of verts) { cx += pos.getX(v); cy += pos.getY(v); cz += pos.getZ(v); }
+    cx /= verts.length; cy /= verts.length; cz /= verts.length;
+    for (const v of verts) {
+      pos.setXYZ(v,
+        cx + (pos.getX(v) - cx) * factor,
+        cy + (pos.getY(v) - cy) * factor,
+        cz + (pos.getZ(v) - cz) * factor);
+    }
+  }
+  pos.needsUpdate = true;
+  geo.computeBoundingBox();
+  geo.computeBoundingSphere();
+}
+
+/** Devuelve al follaje del LOD lejano la superficie que tiene en el cercano. */
+export function matchFoliage(near: Variant, far: Variant) {
+  const tris = (g: THREE.BufferGeometry) => (g.getIndex()?.count ?? g.attributes.position.count) / 3;
+  for (const fp of far.parts) {
+    if (!/leaves|hoja/.test(fp.material.name.toLowerCase())) continue;
+    const np = near.parts.find((p) => p.material.name === fp.material.name);
+    if (!np) continue;
+    inflateLeafCards(fp.geometry, Math.sqrt(tris(np.geometry) / tris(fp.geometry)));
+  }
+}
+
 function prepareMaterial(src: THREE.Material, opts: VariantOptions): THREE.Material {
   const mat = (src as THREE.MeshStandardMaterial).clone();
   mat.side = THREE.DoubleSide;
   mat.roughness = Math.max(mat.roughness, 0.85);
   const hadAlpha = mat.transparent || mat.alphaTest > 0;
   mat.transparent = false;
-  if (opts.alphaMap) {
-    mat.alphaMap = opts.alphaMap;
-    mat.alphaTest = 0.45;
+  // GLTFLoader apaga depthWrite en los materiales alphaMode:BLEND (las hojas lo son). Al pasarlos a
+  // recorte alfa hay que devolvérselo: si no, el follaje se dibuja en la pasada opaca sin escribir
+  // profundidad y todo lo que va después (la capa de nubes) se ve por encima de las copas.
+  mat.depthWrite = true;
+  const name = mat.name.toLowerCase();
+  const alpha = opts.alphaMap instanceof THREE.Texture ? opts.alphaMap
+    : opts.alphaMap ? Object.entries(opts.alphaMap).find(([k]) => name.includes(k))?.[1] : null;
+  if (alpha) {
+    mat.alphaMap = alpha;
+    mat.alphaTest = FOLIAGE_ALPHA_TEST;
   } else if (hadAlpha) {
     mat.alphaTest = 0.5;
   }
-  const name = mat.name.toLowerCase();
   if (opts.registry) {
     if (/leaves|hoja/.test(name) && opts.windLeaves) addWindSway(mat, opts.windLeaves, opts.registry);
     else if (/branch|rama/.test(name) && opts.windBranches) addWindSway(mat, opts.windBranches, opts.registry);
@@ -132,7 +202,8 @@ export function extractVariants(scene: THREE.Object3D, opts: VariantOptions = {}
   };
 
   const raw: { geometry: THREE.BufferGeometry; material: THREE.Material }[][] = [];
-  for (const meshes of byNode.values()) {
+  const groups = opts.singleVariant ? [meshNodes] : [...byNode.values()];
+  for (const meshes of groups) {
     const parts = meshes.map((m) => {
       const g = m.geometry.clone();
       g.applyMatrix4(m.matrixWorld);

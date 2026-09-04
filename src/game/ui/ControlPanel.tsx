@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { WEATHER_PRESETS, autoWeather, daytime, manual, setAutoWeather, setManualParams, setWeather, weather, type WeatherKind } from '../weather';
+import { useNavigationMode, setNavigationMode, toggleNavigationMode } from '../navigation';
 
 const PRESETS: { kind: WeatherKind; label: string }[] = [
   { kind: 'despejado', label: 'Despejado' }, { kind: 'pocasNubes', label: 'Pocas nubes' }, { kind: 'cubierto', label: 'Cubierto' },
@@ -20,6 +21,7 @@ function Slider({ label, value, min, max, step, onChange, format }: { label: str
 export function ControlPanel() {
   const [open, setOpen] = useState(false);
   const [, tick] = useState(0);
+  const navMode = useNavigationMode();
   // refresco periódico para reflejar el clima automático
   useEffect(() => { const id = setInterval(() => tick((n) => n + 1), 250); return () => clearInterval(id); }, []);
 
@@ -29,9 +31,42 @@ export function ControlPanel() {
 
   return (
     <div className={`cp ${open ? 'open' : ''}`}>
-      <button className="cp-toggle" onClick={() => setOpen(!open)}>{open ? 'Cerrar' : 'Clima y hora'}</button>
+      <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
+        <button
+          className="cp-toggle"
+          onClick={toggleNavigationMode}
+          title="Alternar entre modo orbital y caminar"
+        >
+          {navMode === 'walk' ? '🔭 Vista orbital' : '🚶 Caminar por la isla'}
+        </button>
+        <button className="cp-toggle" onClick={() => setOpen(!open)}>
+          {open ? 'Cerrar' : 'Ajustes'}
+        </button>
+      </div>
       {open && (
         <div className="cp-body">
+          <div className="cp-section">
+            <div className="cp-title">Navegación <em>{navMode === 'walk' ? 'Caminando' : 'Orbital'}</em></div>
+            <div className="cp-presets">
+              <button
+                className={navMode === 'orbit' ? 'on' : ''}
+                onClick={() => setNavigationMode('orbit')}
+              >
+                Vista orbital
+              </button>
+              <button
+                className={navMode === 'walk' ? 'on' : ''}
+                onClick={() => setNavigationMode('walk')}
+              >
+                Caminar por la isla
+              </button>
+            </div>
+            {navMode === 'walk' && (
+              <div className="cp-hint">
+                WASD / Flechas: caminar · Shift: correr · Espacio: saltar · Arrastrar: mirar alrededor
+              </div>
+            )}
+          </div>
           <div className="cp-section">
             <div className="cp-title">Hora del día <em>{`${hh.toString().padStart(2, '0')}:${mm.toString().padStart(2, '0')}`}</em></div>
             <Slider label="Hora" value={daytime.hour} min={0} max={24} step={0.05} onChange={(v) => { daytime.hour = v; tick((n) => n + 1); }} format={(v) => `${Math.floor(v)}h`} />

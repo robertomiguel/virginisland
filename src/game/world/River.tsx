@@ -15,7 +15,7 @@ const COLS = 7; // vértices a lo ancho: permite orillas suaves y ondulación po
 /**
  * Cinta de agua que sigue el cauce. Atributos: uv = (posición a lo ancho 0..1, metros recorridos),
  * slope = descenso por metro, tangent = dirección de la corriente en XZ.
- * El tramo vertical (la cascada) y la poza los dibuja Waterfall.
+ * Sólo se dibuja de la poza hacia abajo: por la garganta de la montaña no baja agua.
  */
 function buildRiverGeometry(): THREE.BufferGeometry {
   const n = RIVER.length;
@@ -56,7 +56,8 @@ function buildRiverGeometry(): THREE.BufferGeometry {
       const segSlope = (RIVER[i].bed - RIVER[i + 1].bed) / Math.max(RIVER[i + 1].s - RIVER[i].s, 0.01);
       const underSea = RIVER[i].bed + RIVER_SURFACE_ABOVE_BED < WATER_LEVEL - 0.6; // ahí la lámina la pone el mar
       const pool = inPool(i) && inPool(i + 1); // ahí la lámina la pone el disco de la poza
-      if (segSlope < 1.5 && !underSea && !pool) {
+      const seco = RIVER[i].s < RIVER_POOL_S;   // la garganta, aguas arriba del manantial
+      if (segSlope < 1.5 && !underSea && !pool && !seco) {
         for (let c = 0; c < COLS - 1; c++) {
           const k = i * COLS + c;
           indices.push(k, k + 1, k + COLS, k + 1, k + COLS + 1, k + COLS);
@@ -75,7 +76,7 @@ function buildRiverGeometry(): THREE.BufferGeometry {
   return geo;
 }
 
-/** Disco de agua de la poza al pie de la cascada, con los mismos atributos que la cinta. */
+/** Disco de agua del manantial al pie del salto, con los mismos atributos que la cinta. */
 function buildPoolGeometry(): THREE.BufferGeometry {
   const geo = new THREE.CircleGeometry(POOL.radius + 0.5, 48);
   geo.rotateX(-Math.PI / 2);

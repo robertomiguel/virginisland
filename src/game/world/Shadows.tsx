@@ -190,6 +190,15 @@ export function SunShadows() {
     }
     const csm = csmRef.current;
     if (!csm) return;
+    const u = shadowUniforms;
+
+    // Las texturas se crean en la primera pasada de three; el destino de render luego ya no cambia.
+    const maps = [u.csmMap0, u.csmMap1, u.csmMap2];
+    for (let i = 0; i < CASCADES; i++) {
+      const map = csm.lights[i].shadow.map?.depthTexture;
+      if (map) maps[i].value = map;
+    }
+
     const s = sunStrength();
     const intensity = 2.6 * s + 5.0 * lightning.flash;
     // Dirección del sol (con un mínimo de altura para que las sombras no se alarguen al infinito)
@@ -198,40 +207,46 @@ export function SunShadows() {
     tmpDir.normalize();
     csm.lightDirection.copy(tmpDir).negate();
     for (const l of csm.lights) { l.intensity = intensity; l.color.copy(sunState.color); }
-    csm.update();
 
-    // ¿Hace falta redibujar los mapas de sombra?
+    u.csmOn.value = s > 0.001 ? 1 : 0;
+    u.csmLightDir.value.copy(tmpDir);
+
     const t = clock.getElapsedTime();
-    const moved = camera.position.distanceToSquared(lastCamPos) > 0.6 * 0.6 || camera.quaternion.angleTo(lastCamQuat) > 0.004;
-    const sunMoved = tmpDir.distanceToSquared(lastSun) > 0.002 * 0.002;
-    const stale = t - lastUpdate.current > 1.0; // por si se montaron cosas nuevas (árboles, rocas…)
-    if ((moved || sunMoved || stale) && t - lastUpdate.current > 0.06 && s > 0.001) {
+    // Se redibuja si la cámara se movió o giró, si cambió la luz solar o si no se ha actualizado en > 1s
+    const moved = camera.position.distanceToSquared(lastCamPos) > 1e-4 || camera.quaternion.angleTo(lastCamQuat) > 1e-4;
+    const sunMoved = tmpDir.distanceToSquared(lastSun) > 1e-5;
+    const stale = t - lastUpdate.current > 1.0;
+    const needsInit = !csm.lights[0].shadow.map;
+    const shouldUpdate = (moved || sunMoved || stale || lightning.flash > 0 || needsInit) && s > 0.001;
+
+    if (shouldUpdate) {
+      camera.updateMatrixWorld();
+      csm.update();
+      for (const l of csm.lights) {
+        l.updateMatrixWorld();
+        l.target.updateMatrixWorld();
+        // Misma cuenta que hará three al dibujar la cascada: así la matriz de los uniforms es la
+        // del mapa que se va a dibujar en este mismo fotograma y la sombra no se desplaza al
+        // mover la cámara (el mapa es el mismo destino de render, no una copia del anterior).
+        l.shadow.updateMatrices(l);
+      }
+      // Las cascadas las dibuja three dentro de su propio render (shadowMap.autoUpdate = false):
+      // llamar a gl.shadowMap.render() aquí fuera revienta, porque el estado de render del
+      // renderer es nulo entre fotogramas.
       gl.shadowMap.needsUpdate = true;
+
+      for (let i = 0; i < CASCADES; i++) {
+        const l = csm.lights[i];
+        u.csmMatrix.value[i].copy(l.shadow.matrix);
+        const cam = l.shadow.camera;
+        u.csmTexel.value[i] = (cam.right - cam.left) / SHADOW_MAP_SIZE;
+        u.csmSplit.value[i] = i === 0 ? 0 : csm.breaks[i - 1];
+      }
+
       lastUpdate.current = t;
       lastCamPos.copy(camera.position);
       lastCamQuat.copy(camera.quaternion);
       lastSun.copy(tmpDir);
-    }
-
-    // Primer fotograma: dibuja ya los mapas para que existan antes de que nadie los muestree
-    if (!csm.lights[0].shadow.map && s > 0.001) {
-      gl.shadowMap.needsUpdate = true;
-      gl.shadowMap.render(csm.lights, scene, camera);
-    }
-
-    // Uniforms para los shaders propios
-    const u = shadowUniforms;
-    u.csmOn.value = s > 0.001 ? 1 : 0;
-    u.csmLightDir.value.copy(tmpDir);
-    const maps = [u.csmMap0, u.csmMap1, u.csmMap2];
-    for (let i = 0; i < CASCADES; i++) {
-      const l = csm.lights[i];
-      const map = l.shadow.map?.depthTexture;
-      if (map) maps[i].value = map;
-      u.csmMatrix.value[i].copy(l.shadow.matrix);
-      const cam = l.shadow.camera;
-      u.csmTexel.value[i] = (cam.right - cam.left) / SHADOW_MAP_SIZE;
-      u.csmSplit.value[i] = i === 0 ? 0 : csm.breaks[i - 1];
     }
   }, -6); // antes que el reflejo (-5): los mapas tienen que existir cuando se dibuje
 

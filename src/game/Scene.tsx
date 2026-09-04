@@ -11,14 +11,17 @@ import { Terrain, buildHeightmap } from './world/Terrain';
 import { Ocean, StillWater } from './world/Water';
 import { OceanPhysics } from './world/OceanPhysics';
 import { River } from './world/River';
-import { Waterfall } from './world/Waterfall';
 import { CameraBounds } from './CameraBounds';
 import { Flora, Grass, Logs, Rocks, Trees } from './world/Vegetation';
 import { generateTrees } from './vegetation';
 import { Lights } from './world/Lights';
 import { Ship } from './world/Ship';
+import { Castle } from './world/Fort';
+import { Bridge } from './world/Bridge';
 import { PlanarReflection, reflections, reflectionsEnabled } from './world/Reflection';
 import { WORLD_RADIUS, CAMERA_MAX_DISTANCE, urlVec } from './config';
+import { useNavigationMode } from './navigation';
+import { WalkControls } from './WalkControls';
 
 /** Avanza una etapa de montaje por fotograma para que el mundo aparezca progresivamente. */
 function Stager({ stage, onAdvance, max }: { stage: number; onAdvance: (s: number) => void; max: number }) {
@@ -29,6 +32,7 @@ function Stager({ stage, onAdvance, max }: { stage: number; onAdvance: (s: numbe
 }
 
 export function Scene() {
+  const navMode = useNavigationMode();
   const [stage, setStage] = useState(0);
   const advance = (s: number) => { setPhase(s); setStage(s); };
   const sunDir = useMemo(() => new THREE.Vector3(...SUN_DIRECTION).normalize(), []);
@@ -49,7 +53,6 @@ export function Scene() {
         <>
           <StillWater heightmap={heightmap} sunDir={sunDir} level={LAKE.level} outline={lakeOutline()} />
           <River sunDir={sunDir} heightmap={heightmap} />
-          <Waterfall />
           {reflectionsEnabled() && (
             <>
               <PlanarReflection level={WATER_LEVEL} slot={reflections.sea} every={1} />
@@ -60,10 +63,11 @@ export function Scene() {
       )}
       {stage >= 2 && <Suspense fallback={null}><Trees items={trees} /></Suspense>}
       {stage >= 3 && <Suspense fallback={null}><Flora /></Suspense>}
-      {stage >= 4 && <Suspense fallback={null}><Rocks /><Logs /><Ship /></Suspense>}
+      {stage >= 4 && <Suspense fallback={null}><Rocks /><Logs /><Ship /><Castle /><Bridge /></Suspense>}
       {stage >= 5 && <Grass />}
       <OrbitControls
         makeDefault
+        enabled={navMode === 'orbit'}
         target={urlVec('mira') ?? (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('vista') === 'horizonte' ? [0, 60, 0] : [0, 10, 0])}
         enableDamping
         dampingFactor={0.08}
@@ -72,7 +76,8 @@ export function Scene() {
         maxDistance={CAMERA_MAX_DISTANCE}
         screenSpacePanning={false}
       />
-      <CameraBounds radius={WORLD_RADIUS} />
+      {navMode === 'orbit' && <CameraBounds radius={WORLD_RADIUS} />}
+      {navMode === 'walk' && <WalkControls />}
     </>
   );
 }

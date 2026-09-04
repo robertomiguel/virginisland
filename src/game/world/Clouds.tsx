@@ -22,6 +22,7 @@ const vertexShader = /* glsl */ `
 const fragmentShader = /* glsl */ `
   uniform vec3 sunDir;
   uniform vec3 camPos;
+  uniform vec4 fade;        // (tan mín, tan lleno, distancia de inicio, distancia de fin) del desvanecido
   uniform float cloudDark;
   uniform float dayLight;
   varying vec3 vWorldPos;
@@ -46,8 +47,17 @@ const fragmentShader = /* glsl */ `
     float dark = smoothstep(0.42, 0.7, lumps) * (0.35 + 0.65 * cloudDark) * smoothstep(0.5, 1.0, cloudCoverage);
     color *= 1.0 - 0.5 * dark;
     color *= mix(0.02, 1.0, dayLight);
-    // Bordes suaves y desvanecido hacia el horizonte
-    float horizon = 1.0 - smoothstep(3500.0, 6000.0, distance(vWorldPos.xz, camPos.xz));
+    // Bordes suaves y desvanecido hacia el horizonte. Se apaga por ÁNGULO, no por distancia:
+    // caminando, una capa plana a 650 m se comprime contra el horizonte y forma una pared blanca
+    // por detrás y por debajo de la arboleda. La capa se disuelve en la calima por debajo de unos
+    // 8° sobre el horizonte (menos con cielo cubierto: ahí es gris y sí tiene que llegar abajo).
+    // El corte por distancia solo evita que la recorte el plano lejano de la cámara.
+    float dist = max(distance(vWorldPos.xz, camPos.xz), 1.0);
+    float up = vWorldPos.y - camPos.y;
+    float elev = up / dist;                            // tangente del ángulo sobre el horizonte
+    float below = smoothstep(0.0, 300.0, up);          // solo con la cámara bien por debajo de la capa
+    float lo = mix(fade.x, fade.x * 0.4, cloudCoverage);
+    float horizon = mix(1.0, smoothstep(lo, lo + fade.y, elev), below) * (1.0 - smoothstep(fade.z, fade.w, dist));
     float alpha = smoothstep(0.0, 0.5, d) * mix(0.95, 1.0, cloudDark) * horizon;
     gl_FragColor = vec4(color, alpha);
     #include <tonemapping_fragment>
@@ -78,6 +88,7 @@ export function Clouds({ sunDir }: { sunDir: THREE.Vector3 }) {
             dayLight: { value: 1 },
             sunDir: { value: sunDir.clone() },
             camPos: { value: new THREE.Vector3() },
+            fade: { value: new THREE.Vector4(0.14, 0.14, 2750, 3900) },
           },
         ]),
       }),
@@ -88,6 +99,8 @@ export function Clouds({ sunDir }: { sunDir: THREE.Vector3 }) {
     material.uniforms.cloudTime.value = cloudMotion.time;
     material.uniforms.cloudOffset.value.set(cloudMotion.offsetX, cloudMotion.offsetZ);
     material.uniforms.camPos.value.copy(camera.position);
+    const far = (camera as THREE.PerspectiveCamera).far;
+    material.uniforms.fade.value.set(0.14, 0.14, far * 0.55, far * 0.8);
     material.uniforms.cloudCoverage.value = weather.params.coverage;
     material.uniforms.cloudDark.value = weather.params.darkness;
     material.uniforms.dayLight.value = sunState.day;
