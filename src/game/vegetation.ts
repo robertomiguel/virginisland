@@ -4,7 +4,7 @@ import { LAKE, POOL, castleDistance, coastFactor, lakeNormDistance, riverDistanc
 import { seeded, smoothstep } from './noise';
 import { terrainHeight } from './terrain';
 
-export interface Placed { x: number; y: number; z: number; rot: number; scale: number; kind: number; variant: number; sub?: number; r?: number }
+export interface Placed { x: number; y: number; z: number; rot: number; scale: number; kind: number; variant: number; sub?: number; r?: number; rank?: number }
 
 // --- Árboles ------------------------------------------------------------------------------
 // Modelos de Poly Haven simplificados con gltf-transform: lod1 cerca, lod2 a partir de TREE_NEAR.
@@ -132,15 +132,35 @@ export function generateTrees(candidates = 34000): Placed[] {
   return out;
 }
 
-// --- Flora baja (helechos, arbustos, acedera, anturios) -------------------------------------
+// --- Flora baja (helechos, arbustos, acedera, anturios, matorral) ---------------------------
+/**
+ * `parts` dice a qué materiales del modelo se les pone el mapa alfa: los matorrales de Poly Haven
+ * traen tronco (malla maciza, opaca), hojas y ramitas (tarjetas recortadas), y el alfa solo va en
+ * las dos últimas; los modelos de un solo material lo llevan entero (`parts` vacío).
+ * `far`, hasta dónde se dibuja la especie: una planta de 17k triángulos no puede alcanzar tan lejos
+ * como una de 300 (el anturio, con 11k, era él solo la mitad de los triángulos de la isla).
+ */
 export const FLORA_KINDS = [
-  { id: 'fern_02', url: '/models/fern_02.glb', alpha: '/models/fern_02_alpha.jpg', scale: [1.1, 1.8], inland: true },
-  { id: 'shrub_03', url: '/models/shrub_03.glb', alpha: '/models/shrub_03_alpha.jpg', scale: [1.6, 2.6], inland: false },
-  { id: 'shrub_sorrel_01', url: '/models/shrub_sorrel_01.glb', alpha: '/models/shrub_sorrel_01_alpha.jpg', scale: [1.0, 1.8], inland: false },
-  { id: 'anthurium_botany_01', url: '/models/anthurium_botany_01.glb', alpha: '/models/anthurium_botany_01_alpha.jpg', scale: [0.9, 1.4], inland: true },
+  { id: 'fern_02', url: '/models/fern_02.glb', alpha: '/models/fern_02_alpha.jpg', scale: [1.1, 1.8], parts: [] as readonly string[], far: 160 },
+  { id: 'shrub_03', url: '/models/shrub_03.glb', alpha: '/models/shrub_03_alpha.jpg', scale: [1.6, 2.6], parts: [] as readonly string[], far: 160 },
+  { id: 'shrub_sorrel_01', url: '/models/shrub_sorrel_01.glb', alpha: '/models/shrub_sorrel_01_alpha.jpg', scale: [1.0, 1.8], parts: [] as readonly string[], far: 160 },
+  { id: 'anthurium_botany_01', url: '/models/anthurium_botany_01.glb', alpha: '/models/anthurium_botany_01_alpha.jpg', scale: [0.9, 1.4], parts: [] as readonly string[], far: 70 },
+  // Matorral de la colección namaqualand (arbustos secos de 0,4 a 5 m), ver guardado/pipeline-plantas
+  { id: 'searsia_lucida', url: '/models/searsia_lucida.glb', alpha: '/models/searsia_lucida_alpha.jpg', scale: [0.7, 1.3], parts: ['leaves', 'twigs'] as readonly string[], far: 110 },
+  { id: 'othonna_cerarioides', url: '/models/othonna_cerarioides.glb', alpha: '/models/othonna_cerarioides_alpha.jpg', scale: [0.8, 1.4], parts: ['leaves'] as readonly string[], far: 140 },
+  { id: 'searsia_burchellii', url: '/models/searsia_burchellii.glb', alpha: '/models/searsia_burchellii_alpha.jpg', scale: [0.6, 1.1], parts: ['leaves', 'twigs'] as readonly string[], far: 100 },
 ] as const;
 
-export function generateFlora(candidates = 40000, variantCounts: number[] = [4, 4, 11, 6]): Placed[] {
+/**
+ * Reparto de especies por franja. Los tres namaqualand son matorral seco: pesan hacia la costa y
+ * el monte bajo, y poco en la selva húmeda del interior. Cada fila suma 1.
+ */
+const FLORA_MIX = {
+  interior: [0.36, 0.16, 0.12, 0.18, 0.10, 0.05, 0.03],
+  costa:    [0.06, 0.22, 0.18, 0.02, 0.24, 0.22, 0.06],
+} as const;
+
+export function generateFlora(candidates = 40000, variantCounts: number[] = [4, 4, 11, 6, 7, 7, 3]): Placed[] {
   const out: Placed[] = [];
   const half = ISLAND_SIZE / 2 - 24;
   for (let i = 0; i < candidates; i++) {
@@ -152,9 +172,9 @@ export function generateFlora(candidates = 40000, variantCounts: number[] = [4, 
     if (riverDistance(x, z).d < 5 || lakeNormDistance(x, z) < LAKE.radius + 3 || Math.hypot(x - POOL.x, z - POOL.z) < POOL.radius + 2) continue;
     const c = coastFactor(x, z);
     const r = seeded(i, 23);
-    let kind: number;
-    if (c < 0.6) kind = r < 0.45 ? 0 : r < 0.65 ? 3 : r < 0.85 ? 1 : 2;
-    else kind = r < 0.5 ? 1 : r < 0.85 ? 2 : 0;
+    const mix = c < 0.6 ? FLORA_MIX.interior : FLORA_MIX.costa;
+    let kind = mix.length - 1, acc = 0;
+    for (let m = 0; m < mix.length; m++) { acc += mix[m]; if (r < acc) { kind = m; break; } }
     const density = 0.3 + 0.7 * smoothstep(1.0, 0.45, c); // sotobosque denso en la selva interior
     if (seeded(i, 24) > density) continue;
     const k = FLORA_KINDS[kind];
@@ -204,12 +224,90 @@ export function generateRocks(candidates = 9000, variantCounts: number[] = [1, 1
   return out;
 }
 
-// --- Pasto y flores (solo cerca de la cámara) ----------------------------------------------
-// El pasto son matas de musgo (moss_01 de Poly Haven): matojos sueltos que se agrupan en corros.
-export const GRASS_MODEL = { url: '/models/moss_01.glb', alpha: '/models/moss_01_alpha.jpg', tuftScale: 8 } as const;
-export const GRASS_VARIANTS = 5;
-// Flores: modelos de Poly Haven (antes eran tallos y pétalos de geometría hecha a mano).
-// `variant` de un elemento con kind 1 dice la especie; `sub`, cuál de los ejemplares del modelo.
+// --- Pasto ---------------------------------------------------------------------------------
+/**
+ * El pasto son matas de hierba de Poly Haven a su tamaño real: `grass_medium_02` (matojos de
+ * 15-40 cm) y algo de musgo (`moss_01`, matojos de 3 cm) a ras de suelo. Antes era solo el musgo,
+ * agrandado ×8 y sembrado a 0,09 matas/m2: de cerca no había briznas, solo bultos verdes cada 3 m,
+ * y lo que se veía como pasto era la textura del terreno.
+ *
+ * `grass_bermuda_01` y `grass_medium_01`, las otras dos hierbas del catálogo, se probaron y se
+ * descartaron: sus atlas son mucho más oscuros (color medio de la brizna 78,84,42 y 34,35,17 frente
+ * a 131,130,89) y sobre el suelo claro se leían como matojos quemados, no como pasto.
+ *
+ * `tufts` y `radius` arman cada mata a partir de los matojos del modelo; `scale`, el tamaño de la
+ * mata ya puesta en el suelo; `share`, qué parte del pasto es de esta especie.
+ */
+export const GRASS_KINDS = [
+  { id: 'grass_medium_02', url: '/models/grass_medium_02.glb', alpha: '/models/grass_medium_02_alpha.jpg', share: 0.82, tufts: [1, 2], radius: 0.15, tuftScale: 1, scale: [0.9, 1.9] },
+  { id: 'moss_01', url: '/models/moss_01.glb', alpha: '/models/moss_01_alpha.jpg', share: 0.18, tufts: [7, 11], radius: 0.16, tuftScale: 3, scale: [1.2, 2.0] },
+] as const;
+export const GRASS_VARIANTS = 7;       // matas distintas que se arman por especie
+export const GRASS_CELL = 4;           // lado de la celda de siembra, en metros
+export const GRASS_DENSITY_NEAR = 3.4; // matas por m2 en la alfombra de los pies
+export const GRASS_DENSITY = 1.8;      // matas por m2 a media distancia
+export const GRASS_CARPET = 8;         // hasta este radio, la alfombra tupida
+export const GRASS_NEAR = 18;          // aquí ya se ha ralado a GRASS_DENSITY
+export const GRASS_FAR = 30;           // aquí no queda ninguna: de ahí para allá manda la textura
+
+/**
+ * Matas por m2 a esa distancia de la cámara. Tupido a los pies —que es donde se ve si el suelo
+ * tiene pasto o no— y ralo hacia el borde, para que el pasto se acabe difuminado y no en un círculo.
+ */
+export function grassDensityAt(d: number): number {
+  const carpet = GRASS_DENSITY_NEAR - GRASS_DENSITY;
+  return (GRASS_DENSITY + carpet * (1 - smoothstep(GRASS_CARPET, GRASS_NEAR, d))) * (1 - smoothstep(GRASS_NEAR, GRASS_FAR, d));
+}
+
+/**
+ * Matas de una celda de `GRASS_CELL` metros. A la densidad que hace falta para que el suelo se vea
+ * cubierto no cabe una lista de toda la isla (serían cientos de miles de matas), así que se siembra
+ * alrededor de la cámara: la celda es determinista, se siembra una vez al entrar en el radio y se
+ * tira al salir, de modo que el pasto no baila cuando el jugador va y vuelve.
+ *
+ * Los rechazos por agua, altura y pendiente se hacen por celda —varían despacio y ahorran cinco
+ * sondeos de terreno por mata—, con margen de media diagonal para que valgan en toda su superficie.
+ * Solo la cota de cada mata se mide en su sitio.
+ */
+export function grassCell(ix: number, iz: number): Placed[] {
+  const out: Placed[] = [];
+  const x0 = ix * GRASS_CELL, z0 = iz * GRASS_CELL;
+  const cx = x0 + GRASS_CELL / 2, cz = z0 + GRASS_CELL / 2;
+  const margin = GRASS_CELL * 0.71; // media diagonal de la celda
+  const hc = terrainHeight(cx, cz);
+  if (hc < 1.0 || hc > 48) return out;
+  if (slopeAt(cx, cz) > 0.5) return out;
+  if (riverDistance(cx, cz).d < 4.5 + margin) return out;
+  if (lakeNormDistance(cx, cz) < LAKE.radius + 2 + margin) return out;
+  if (Math.hypot(cx - POOL.x, cz - POOL.z) < POOL.radius + 2 + margin) return out;
+  const tall = 1 + 0.5 * smoothstep(1.0, 0.4, coastFactor(cx, cz)); // más alto tierra adentro
+  const base = Math.imul(ix, 73856093) ^ Math.imul(iz, 19349663);
+  const n = Math.round(GRASS_DENSITY_NEAR * GRASS_CELL * GRASS_CELL);
+  for (let k = 0; k < n; k++) {
+    const s = base + k;
+    const x = x0 + seeded(s, 61) * GRASS_CELL;
+    const z = z0 + seeded(s, 62) * GRASS_CELL;
+    const h = terrainHeight(x, z);
+    if (h < 2.4 || h > 44) continue;
+    const r = seeded(s, 63);
+    let kind = GRASS_KINDS.length - 1, acc = 0;
+    for (let i = 0; i < GRASS_KINDS.length; i++) { acc += GRASS_KINDS[i].share; if (r < acc) { kind = i; break; } }
+    const sc = GRASS_KINDS[kind].scale;
+    out.push({
+      x, y: h - 0.02, z,
+      rot: seeded(s, 65) * Math.PI * 2,
+      scale: (sc[0] + (sc[1] - sc[0]) * seeded(s, 64)) * tall,
+      kind,
+      variant: Math.floor(seeded(s, 66) * GRASS_VARIANTS),
+      rank: seeded(s, 67) * GRASS_DENSITY_NEAR, // matas por m2 que hacen falta para que esta salga
+    });
+  }
+  return out;
+}
+
+// --- Flores --------------------------------------------------------------------------------
+// Modelos de Poly Haven (antes eran tallos y pétalos de geometría hecha a mano).
+// `variant` dice la especie; `sub`, cuál de los ejemplares del modelo.
 export const FLOWER_KINDS = [
   { id: 'celandine_01', url: '/models/celandine_01.glb', alpha: '/models/celandine_01_alpha.jpg', scale: [1.2, 1.9] },                 // amarillas, 12-19 cm
   { id: 'dandelion_01', url: '/models/dandelion_01.glb', alpha: '/models/dandelion_01_alpha.jpg', scale: [1.6, 2.6] },                 // blancas, 5-16 cm
@@ -217,25 +315,22 @@ export const FLOWER_KINDS = [
   { id: 'flower_heliophila', url: '/models/flower_heliophila.glb', alpha: '/models/flower_heliophila_alpha.jpg', scale: [0.8, 1.3] },  // mata baja de flores blancas menudas, 27-40 cm
 ] as const;
 
-export function generateGrass(candidates = 60000): Placed[] {
+/** Flores silvestres de toda la isla: son pocas y se listan de una vez, como el resto de la flora. */
+export function generateFlowers(candidates = 60000): Placed[] {
   const out: Placed[] = [];
   const half = ISLAND_SIZE / 2 - 24;
   for (let i = 0; i < candidates; i++) {
+    if (seeded(i, 43) >= 0.18) continue;
     const x = (seeded(i, 41) - 0.5) * 2 * half;
     const z = (seeded(i, 42) - 0.5) * 2 * half;
     const h = terrainHeight(x, z);
     if (h < 2.4 || h > 44) continue;
     if (slopeAt(x, z) > 0.5) continue;
     if (riverDistance(x, z).d < 4.5 || lakeNormDistance(x, z) < LAKE.radius + 2) continue;
-    const r = seeded(i, 43);
-    const isFlower = r < 0.18;
-    const kind = isFlower ? 1 : 0;
-    const variant = isFlower ? Math.floor(seeded(i, 44) * FLOWER_KINDS.length) : Math.floor(seeded(i, 44) * GRASS_VARIANTS);
-    const c = coastFactor(x, z);
-    const tall = 1 + 0.9 * smoothstep(1.0, 0.4, c); // más alto y tupido en el interior
-    const sc = (0.8 + seeded(i, 46) * 0.6) * (isFlower ? 1 : tall);
-    const scale = isFlower ? sc * (FLOWER_KINDS[variant].scale[0] + (FLOWER_KINDS[variant].scale[1] - FLOWER_KINDS[variant].scale[0]) * seeded(i, 47)) : sc;
-    out.push({ x, y: h - 0.02, z, rot: seeded(i, 45) * Math.PI * 2, scale, kind, variant, sub: Math.floor(seeded(i, 48) * 8) });
+    const variant = Math.floor(seeded(i, 44) * FLOWER_KINDS.length);
+    const k = FLOWER_KINDS[variant];
+    const scale = (0.8 + seeded(i, 46) * 0.6) * (k.scale[0] + (k.scale[1] - k.scale[0]) * seeded(i, 47));
+    out.push({ x, y: h - 0.02, z, rot: seeded(i, 45) * Math.PI * 2, scale, kind: 1, variant, sub: Math.floor(seeded(i, 48) * 8) });
   }
   return out;
 }

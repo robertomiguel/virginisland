@@ -119,6 +119,18 @@ const fragmentShader = /* glsl */ `
     vec2 uv2 = mat2(0.8, -0.6, 0.6, 0.8) * vWorldPos.xz * scale * 0.23;
     return mix(texture2D(map, uv).rgb, texture2D(map, uv2).rgb, 0.5);
   }
+  /**
+   * Lo mismo para un mapa de normales, pero SUMANDO las pendientes en vez de promediar los dos
+   * téxeles: dos normales de sitios distintos apuntan a lados distintos y su media tiende a la
+   * normal plana, que es lo que dejaba el suelo sin relieve. Devuelve la normal ya descodificada.
+   */
+  vec3 sampleTopNor(sampler2D map, float scale) {
+    vec2 uv = vWorldPos.xz * scale;
+    vec2 uv2 = mat2(0.8, -0.6, 0.6, 0.8) * vWorldPos.xz * scale * 0.23;
+    vec3 a = texture2D(map, uv).rgb * 2.0 - 1.0;
+    vec3 b = texture2D(map, uv2).rgb * 2.0 - 1.0;
+    return normalize(vec3(a.xy + b.xy * 0.5, a.z * b.z));
+  }
   vec3 sampleTri(sampler2D map, float scale, vec3 n) {
     vec3 w = pow(abs(n), vec3(4.0));
     w /= (w.x + w.y + w.z);
@@ -177,11 +189,13 @@ const fragmentShader = /* glsl */ `
     float snow = smoothstep(72.0, 84.0, h + blendNoise * 4.0) * (1.0 - smoothstep(0.3, 0.55, slope));
     albedo = mix(albedo, vec3(0.93, 0.95, 0.98), snow);
 
-    vec3 grassN = mix(mix(sampleTop(grassNor, grassScale), sampleTop(wildNor, wildScale), wildMix), sampleTop(floorNor, floorScale), litter);
-    vec3 nt = (sampleTop(sandNor, sandScale) * sandW
-             + grassN * grassW
-             + sampleTri(rockNor, rockScale, n) * rockW) * 2.0 - 1.0;
-    vec3 shadedN = normalize(n + vec3(nt.x, 0.0, -nt.y) * 0.9 * (1.0 - snow));
+    vec3 grassN = mix(mix(sampleTopNor(grassNor, grassScale), sampleTopNor(wildNor, wildScale), wildMix), sampleTopNor(floorNor, floorScale), litter);
+    vec3 nt = sampleTopNor(sandNor, sandScale) * sandW
+            + grassN * grassW
+            + (sampleTri(rockNor, rockScale, n) * 2.0 - 1.0) * rockW;
+    vec3 shadedN = normalize(n + vec3(nt.x, 0.0, -nt.y) * 1.1 * (1.0 - snow));
+    // Oclusión de las hondonadas de la textura: lo que el mapa de normales hunde, se oscurece.
+    float cavity = 1.0 - 0.35 * clamp(length(nt.xy) * 1.6, 0.0, 1.0) * (1.0 - snow);
 
     float diff = max(dot(shadedN, sunDir), 0.0);
     // Sombra de las nubes: se proyecta desde la capa de nubes siguiendo la dirección del sol
@@ -194,7 +208,7 @@ const fragmentShader = /* glsl */ `
     float canopyShade = 1.0 - 0.25 * smoothstep(0.1, 0.9, forest);
     // Suelo mojado: más oscuro, saturado y con brillo especular
     albedo *= 1.0 - 0.45 * wet;
-    vec3 color = albedo * (sunColor * diff * sunLight * canopyShade + hemi * (1.0 - 0.25 * cloud) * (0.55 + 0.45 * sunStrength) * (0.7 + 0.3 * canopyShade) * mix(0.015, 1.0, dayLight));
+    vec3 color = albedo * cavity * (sunColor * diff * sunLight * canopyShade + hemi * (1.0 - 0.25 * cloud) * (0.55 + 0.45 * sunStrength) * (0.7 + 0.3 * canopyShade) * mix(0.015, 1.0, dayLight));
     vec3 v = normalize(cameraPosition - vWorldPos);
     vec3 hv = normalize(sunDir + v);
     color += sunColor * pow(max(dot(shadedN, hv), 0.0), 40.0) * 0.35 * wet * sunLight;

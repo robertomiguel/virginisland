@@ -3,10 +3,18 @@ Modelos: Poly Haven (CC0) — island_tree_01, jacaranda_tree; simplificados con 
    el tronco del jacarandá hubo que soldarlo por posición antes de simplificar, y las hojas se
    rehicieron como tarjetas planas en vez de simplificarlas; ver guardado/pipeline-arboles)
 fern_02, shrub_03, shrub_sorrel_01, anthurium_botany_01 (Poly Haven CC0) flora baja
+searsia_lucida, othonna_cerarioides, searsia_burchellii (Poly Haven CC0, James Ray Cock y
+  Jenelle van Heerden) matorral de la colección namaqualand, de 0,4 a 5 m: tronco simplificado
+  con QEM tras soldarlo por posición, y hojas y ramitas adelgazadas a una tarjeta de cada N
+  agrandada por raíz de N (el QEM las deshace); ver guardado/pipeline-plantas
 boulder_01, namaqualand_boulder_03, namaqualand_boulder_05, rock_moss_set_01 (Poly Haven CC0) rocas
 dead_tree_trunk, dead_tree_trunk_02 (Poly Haven CC0) troncos caídos
 dutch_ship_large_01 (Poly Haven CC0) barco fondeado; texturas 1k empaquetadas en un GLB
 modular_fort_01 (Poly Haven CC0, Rico Cilliers) kit modular de fuerte: 22 piezas en un GLB, texturas 1k
-moss_01 (Poly Haven CC0, Rob Tuytel) matojos de musgo: el pasto son matas de estos, texturas 512
+grass_medium_02 (Poly Haven CC0) el pasto: matojos de hierba de 15-40 cm; gltf 1k -> resize 512 +
+  simplify 0.11 (tira triángulos a lo largo de cada brizna sin perder briznas: 191 -> 186,
+  41 -> 4,6 tris por brizna), alfa 1k -> gris 512 aparte
+  (grass_bermuda_01 y grass_medium_01 se descartaron: atlas demasiado oscuros)
+moss_01 (Poly Haven CC0, Rob Tuytel) matojos de musgo mezclados con el pasto, texturas 512
 celandine_01, dandelion_01, flower_gazania, flower_heliophila (Poly Haven CC0) flores silvestres:
   gltf 1k -> resize 512 (dandelion y heliophila además simplify 0.22), alfa 1k -> gris 512 aparte

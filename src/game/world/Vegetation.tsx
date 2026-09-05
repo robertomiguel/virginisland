@@ -3,13 +3,14 @@ import { Suspense, useEffect, useMemo, useRef } from 'react';
 import { useFrame, useLoader } from '@react-three/fiber';
 import { useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
-import { FLORA_KINDS, FLOWER_KINDS, GRASS_MODEL, GRASS_VARIANTS, LOG_KINDS, ROCK_KINDS, TREE_KINDS, TREE_NEAR, generateFlora, generateGrass, generateLogs, generateRocks, type Placed } from '../vegetation';
+import { FLORA_KINDS, FLOWER_KINDS, GRASS_CELL, GRASS_FAR, GRASS_KINDS, GRASS_VARIANTS, LOG_KINDS, ROCK_KINDS, TREE_KINDS, TREE_NEAR, generateFlora, generateFlowers, generateLogs, generateRocks, grassCell, grassDensityAt, type Placed } from '../vegetation';
 import { WIND } from '../config';
-import { weather } from '../weather';
+
+import { weather, weatherClock } from '../weather';
 import { FOLIAGE_ALPHA_TEST, extractVariants, matchFoliage, type Variant } from './variants';
 import { prepareAlphaMap } from './alphaMips';
 import { addWindSway } from './windShader';
-import { buildMossClump } from './grass';
+import { buildClump, liftNormals } from './grass';
 import { registerStandardMaterial } from './Shadows';
 import { REFLECT_MASK } from './Reflection';
 
@@ -108,11 +109,13 @@ function FloraKind({ items, kind, onVariants }: { items: Placed[]; kind: number;
   const alpha = useLoader(THREE.TextureLoader, k.alpha);
   const variants = useMemo(() => {
     prepareAlphaMap(alpha, FOLIAGE_ALPHA_TEST);
-    return extractVariants(gltf.scene, { alphaMap: alpha }).map((v) => ({ near: v }));
-  }, [gltf, alpha]);
+    // En los matorrales el alfa va solo en hojas y ramitas: al tronco lo agujerearía
+    const alphaMap = k.parts.length ? Object.fromEntries(k.parts.map((n) => [n, alpha])) : alpha;
+    return extractVariants(gltf.scene, { alphaMap }).map((v) => ({ near: v }));
+  }, [gltf, alpha, k.parts]);
   useEffect(() => onVariants?.(variants.length), [variants, onVariants]);
   const mine = useMemo(() => items.filter((t) => t.kind === kind).map((t) => ({ ...t, variant: t.variant % variants.length })), [items, kind, variants.length]);
-  return <InstancedLayer items={mine} variants={variants} nearDist={Infinity} maxDist={160} />;
+  return <InstancedLayer items={mine} variants={variants} nearDist={Infinity} maxDist={k.far} />;
 }
 
 export function Flora() {
@@ -192,49 +195,133 @@ function FlowerKind({ items, kind }: { items: Placed[]; kind: number }) {
   return <InstancedLayer items={mine} variants={variants} nearDist={Infinity} maxDist={60} />;
 }
 
-// --- Pasto y flores ------------------------------------------------------------------------
-const GRASS_WIND = 0.012; // 0 para apagar el vaivén del pasto
-
-export function Grass() {
-  const items = useMemo(() => generateGrass(), []);
-  const registry = useMemo<THREE.WebGLProgramParametersWithUniforms[]>(() => [], []);
-  const gltf = useGLTF(GRASS_MODEL.url);
-  const alpha = useLoader(THREE.TextureLoader, GRASS_MODEL.alpha);
-  const grassVariants = useMemo(() => {
-    prepareAlphaMap(alpha, FOLIAGE_ALPHA_TEST);
-    // Los matojos del modelo miden ~3 cm: se agrandan y se agrupan en matas del tamaño del pasto
-    const tufts = extractVariants(gltf.scene, { alphaMap: alpha });
-    const material = tufts[0].parts[0].material;
-    if (GRASS_WIND > 0) addWindSway(material as THREE.MeshStandardMaterial, GRASS_WIND, registry);
-    const geos = tufts.map((t) => t.parts[0].geometry);
-    return Array.from({ length: GRASS_VARIANTS }, (_, i) => ({
-      near: { parts: [{ geometry: buildMossClump(i + 1, geos, GRASS_MODEL.tuftScale), material }], baseY: 0 } as Variant,
-    }));
-  }, [gltf, alpha, registry]);
-  const grass = useMemo(() => items.filter((t) => t.kind === 0), [items]);
-  const flowers = useMemo(() => items.filter((t) => t.kind === 1), [items]);
-  useEffect(() => { console.info(`[isla] matas de pasto: ${grass.length}, flores: ${flowers.length}`); }, [grass, flowers]);
-
-  useFrame(({ clock }) => {
-    const t = clock.getElapsedTime();
-    for (const s of registry) {
-      s.uniforms.uTime.value = t;
-      s.uniforms.uWind.value = weather.params.wind;
-      s.uniforms.uWindDir.value.copy(windDir);
-    }
-  });
-
+export function Flowers() {
+  const items = useMemo(() => generateFlowers(), []);
+  useEffect(() => { console.info(`[isla] flores: ${items.length}`); }, [items]);
   return (
     <group>
-      <InstancedLayer items={grass} variants={grassVariants} nearDist={Infinity} maxDist={75} />
       {FLOWER_KINDS.map((_, i) => (
-        <Suspense key={i} fallback={null}><FlowerKind items={flowers} kind={i} /></Suspense>
+        <Suspense key={i} fallback={null}><FlowerKind items={items} kind={i} /></Suspense>
       ))}
     </group>
   );
 }
 
-useGLTF.preload(GRASS_MODEL.url);
+// --- Pasto ---------------------------------------------------------------------------------
+// Vaivén del pasto: flojo a propósito. El juego va a 30 fps, y una mata de 30 cm que se mueva
+// más que unos centímetros no se lee como viento sino como temblor.
+const GRASS_WIND = 0.08;     // 0 para apagarlo
+const GRASS_LIFT = 0.7;      // cuánto se inclina la normal de la brizna hacia el cielo
+const GRASS_CAPACITY = 800;  // matas que caben en cada InstancedMesh (una por especie y variante)
+
+/**
+ * Alfombra de pasto alrededor de la cámara.
+ *
+ * No es una `InstancedLayer` porque las matas no salen de una lista fija: se siembran por celdas
+ * según anda el jugador (`grassCell`). Cada especie y variante tiene su malla instanciada con sitio
+ * reservado; en cada repaso se recorren las celdas del radio y se escriben las matrices.
+ *
+ * La densidad la pone `grassDensityAt`: cada mata trae fijo el número de matas por m2 a partir del
+ * cual le toca salir, y se dibuja mientras la densidad de su distancia llegue a ese número. Así el
+ * pasto se espesa al acercarse y se ralea hacia el borde sin cortarse en un círculo, y una mata dada
+ * aparece una sola vez, sin parpadear.
+ */
+export function Grass() {
+  const registry = useMemo<THREE.WebGLProgramParametersWithUniforms[]>(() => [], []);
+  const gltfs = useGLTF(GRASS_KINDS.map((k) => k.url));
+  const alphas = useLoader(THREE.TextureLoader, GRASS_KINDS.map((k) => k.alpha));
+
+  // Una mata por especie y variante, ya fusionada
+  const shapes = useMemo(() => {
+    const out: { geometry: THREE.BufferGeometry; material: THREE.Material }[] = [];
+    GRASS_KINDS.forEach((k, i) => {
+      prepareAlphaMap(alphas[i], FOLIAGE_ALPHA_TEST);
+      const tufts = extractVariants(gltfs[i].scene, { alphaMap: alphas[i] });
+      const material = tufts[0].parts[0].material;
+      // El vaivén de las hojas mide desde el centro de la copa; en una mata de 30 cm hay que
+      // apagar ese reparto para que la brizna se doble entera.
+      if (GRASS_WIND > 0) addWindSway(material as THREE.MeshStandardMaterial, GRASS_WIND, registry, [0, 0.02]);
+      liftNormals(material as THREE.MeshStandardMaterial, GRASS_LIFT);
+      const geos = tufts.map((t) => t.parts[0].geometry);
+      for (let v = 0; v < GRASS_VARIANTS; v++) {
+        out.push({ geometry: buildClump(i * 10 + v + 1, geos, { count: [...k.tufts] as [number, number], radius: k.radius, scale: k.tuftScale }), material });
+      }
+    });
+    return out;
+  }, [gltfs, alphas, registry]);
+
+  const meshes = useRef<THREE.InstancedMesh[]>([]);
+  const cells = useRef(new Map<string, Placed[]>());
+  const timer = useRef(10);
+  const logged = useRef(false);
+
+  useMemo(() => { for (const sh of shapes) registerStandardMaterial(sh.material); }, [shapes]);
+
+  useFrame(({ camera }, dt) => {
+    // Reloj propio acumulado por dt: con frameloop="never" + FrameLimiter el de R3F da saltos,
+    // y un salto en el tiempo del viento es justo lo que hace que el pasto tiemble.
+    for (const s of registry) {
+      s.uniforms.uTime.value = weatherClock.t;
+      s.uniforms.uWind.value = weather.params.wind;
+      s.uniforms.uWindDir.value.copy(windDir);
+    }
+    timer.current += dt;
+    if (timer.current < 0.4) return;
+    timer.current = 0;
+
+    const cx = camera.position.x, cz = camera.position.z;
+    const reach = GRASS_FAR + GRASS_CELL;
+    const i0 = Math.floor((cx - reach) / GRASS_CELL), i1 = Math.floor((cx + reach) / GRASS_CELL);
+    const j0 = Math.floor((cz - reach) / GRASS_CELL), j1 = Math.floor((cz + reach) / GRASS_CELL);
+    const counts = new Array(shapes.length).fill(0);
+    const live = new Set<string>();
+    for (let i = i0; i <= i1; i++) {
+      for (let j = j0; j <= j1; j++) {
+        // la celda entra si alguna esquina cae dentro del radio
+        if (Math.hypot((i + 0.5) * GRASS_CELL - cx, (j + 0.5) * GRASS_CELL - cz) > GRASS_FAR + GRASS_CELL * 0.71) continue;
+        const key = `${i},${j}`;
+        live.add(key);
+        let items = cells.current.get(key);
+        if (!items) cells.current.set(key, (items = grassCell(i, j)));
+        for (const it of items) {
+          const d = Math.hypot(it.x - cx, it.z - cz);
+          if (it.rank! > grassDensityAt(d)) continue;
+          const sh = it.kind * GRASS_VARIANTS + it.variant;
+          const n = counts[sh];
+          if (n >= GRASS_CAPACITY) continue;
+          dummy.position.set(it.x, it.y, it.z);
+          dummy.rotation.set(0, it.rot, 0);
+          dummy.scale.setScalar(it.scale);
+          dummy.updateMatrix();
+          meshes.current[sh]?.setMatrixAt(n, dummy.matrix);
+          counts[sh] = n + 1;
+        }
+      }
+    }
+    for (const key of cells.current.keys()) if (!live.has(key)) cells.current.delete(key);
+    shapes.forEach((_, i) => {
+      const m = meshes.current[i];
+      if (!m) return;
+      m.count = counts[i];
+      m.instanceMatrix.needsUpdate = true;
+    });
+    if (!logged.current) {
+      logged.current = true;
+      const tris = shapes.reduce((a, sh, i) => a + counts[i] * (sh.geometry.getIndex()!.count / 3), 0);
+      console.info(`[isla] pasto: ${counts.reduce((a, b) => a + b, 0)} matas a la vista, ${Math.round(tris / 1000)}k triángulos`);
+    }
+  });
+
+  return (
+    <group>
+      {shapes.map((sh, i) => (
+        <instancedMesh key={i} ref={(el) => { if (el) meshes.current[i] = el; }} args={[sh.geometry, sh.material, GRASS_CAPACITY]} frustumCulled={false} count={0} receiveShadow />
+      ))}
+    </group>
+  );
+}
+
+for (const k of GRASS_KINDS) useGLTF.preload(k.url);
 for (const k of TREE_KINDS) { useGLTF.preload(k.lod1); useGLTF.preload(k.lod2); }
 for (const k of FLORA_KINDS) useGLTF.preload(k.url);
 for (const k of FLOWER_KINDS) useGLTF.preload(k.url);

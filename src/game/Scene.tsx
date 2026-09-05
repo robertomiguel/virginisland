@@ -12,7 +12,7 @@ import { Ocean, StillWater } from './world/Water';
 import { OceanPhysics } from './world/OceanPhysics';
 import { River } from './world/River';
 import { CameraBounds } from './CameraBounds';
-import { Flora, Grass, Logs, Rocks, Trees } from './world/Vegetation';
+import { Flora, Flowers, Grass, Logs, Rocks, Trees } from './world/Vegetation';
 import { generateTrees } from './vegetation';
 import { Lights } from './world/Lights';
 import { Ship } from './world/Ship';
@@ -64,7 +64,7 @@ export function Scene() {
       {stage >= 2 && <Suspense fallback={null}><Trees items={trees} /></Suspense>}
       {stage >= 3 && <Suspense fallback={null}><Flora /></Suspense>}
       {stage >= 4 && <Suspense fallback={null}><Rocks /><Logs /><Ship /><Castle /><Bridge /></Suspense>}
-      {stage >= 5 && <Grass />}
+      {stage >= 5 && <Suspense fallback={null}><Grass /><Flowers /></Suspense>}
       <OrbitControls
         makeDefault
         enabled={navMode === 'orbit'}

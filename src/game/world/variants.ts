@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { addWindSway } from './windShader';
+import { dilateColorMap } from './alphaMips';
 
 /** Umbral de recorte del follaje: lo comparten los materiales y las mipmaps de cobertura. */
 export const FOLIAGE_ALPHA_TEST = 0.45;
@@ -164,6 +165,8 @@ function prepareMaterial(src: THREE.Material, opts: VariantOptions): THREE.Mater
   if (alpha) {
     mat.alphaMap = alpha;
     mat.alphaTest = FOLIAGE_ALPHA_TEST;
+    // El atlas de color viene sobre fondo negro; sin rellenarlo, de lejos el follaje se ennegrece
+    if (mat.map) dilateColorMap(mat.map, alpha, FOLIAGE_ALPHA_TEST);
   } else if (hadAlpha) {
     mat.alphaTest = 0.5;
   }
@@ -183,12 +186,16 @@ export function extractVariants(scene: THREE.Object3D, opts: VariantOptions = {}
   const meshNodes: THREE.Mesh[] = [];
   scene.traverse((o) => { if ((o as THREE.Mesh).isMesh) meshNodes.push(o as THREE.Mesh); });
 
-  // agrupar mallas por su nodo "variante" (padre con nombre _a, _b… o la propia malla)
+  // agrupar mallas por su nodo "variante" (padre con nombre _a, _b… o _LOD0, o la propia malla).
+  // Los dos patrones van anclados al final a propósito: una malla de un nodo con varias primitivas
+  // se llama `<nodo>_1`, así que sin anclar `LOD\d` el propio trozo pasaba por variante y cada
+  // arbusto se repartía en tronco, hojas y ramitas sueltos.
+  const variantName = /_[a-z]$|_LOD\d$/i;
   const byNode = new Map<THREE.Object3D, THREE.Mesh[]>();
   for (const m of meshNodes) {
     let n: THREE.Object3D = m;
-    while (n.parent && n.parent !== scene && !/_[a-z]$|LOD\d/i.test(n.name)) n = n.parent;
-    const key = /_[a-z]$/i.test(n.name) ? n : m;
+    while (n.parent && n.parent !== scene && !variantName.test(n.name)) n = n.parent;
+    const key = variantName.test(n.name) ? n : m;
     const arr = byNode.get(key) ?? [];
     arr.push(m);
     byNode.set(key, arr);

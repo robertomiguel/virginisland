@@ -1,7 +1,13 @@
 import * as THREE from 'three';
 
-/** Inyecta el vaivén de viento (ráfagas que recorren el bosque) en un material estándar instanciado. */
-export function addWindSway(mat: THREE.MeshStandardMaterial, strength: number, registry: THREE.WebGLProgramParametersWithUniforms[]) {
+/**
+ * Inyecta el vaivén de viento (ráfagas que recorren el bosque) en un material estándar instanciado.
+ *
+ * `radial` es el tramo en el que el vaivén crece desde el centro del modelo: en un árbol el tronco
+ * está quieto y la punta de las ramas es lo que se mueve. En una mata de pasto de 30 cm no hay tal
+ * reparto —la brizna se dobla entera—, así que se le pasa un tramo muy corto.
+ */
+export function addWindSway(mat: THREE.MeshStandardMaterial, strength: number, registry: THREE.WebGLProgramParametersWithUniforms[], radial: [number, number] = [0.2, 3.0]) {
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uTime = { value: 0 };
     shader.uniforms.uWind = { value: 0 };
@@ -15,7 +21,7 @@ export function addWindSway(mat: THREE.MeshStandardMaterial, strength: number, r
           vec3 iPos = vec3(instanceMatrix[3][0], instanceMatrix[3][1], instanceMatrix[3][2]);
           float phase = fract(sin(iPos.x * 12.9898 + iPos.z * 78.233) * 43758.5453) * 6.2832;
           float hgt = max(position.y, 0.0);
-          float radial = smoothstep(0.2, 3.0, length(position.xz) + hgt * 0.3);
+          float radial = smoothstep(${radial[0].toFixed(5)}, ${radial[1].toFixed(5)}, length(position.xz) + hgt * 0.3);
           float along = dot(iPos.xz, uWindDir);
           float g1 = sin(along * 0.025 - uTime * 0.45 + phase * 0.25);
           float g2 = sin(along * 0.009 - uTime * 0.19 + 1.7);
